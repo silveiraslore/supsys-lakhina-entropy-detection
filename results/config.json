@@ -1,0 +1,12 @@
+{
+  "dataset_path": "dataset/9/capture20110817.binetflow",
+  "splits_dir": "dataset/9/splits/",
+  "results_dir": "results/",
+  "window_seconds": 60,
+  "n_components": 2,
+  "min_flows": 5,
+  "threshold_init": 0.5,
+  "train_ratio": 0.6,
+  "val_ratio": 0.2,
+  "threshold_final": 0.07037334576021767
+}

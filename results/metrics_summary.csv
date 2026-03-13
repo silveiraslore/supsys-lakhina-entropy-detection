@@ -1,0 +1,2 @@
+TP,TN,FP,FN,Accuracy,Precision,Recall,F1,FPR,FNR,TNR,AUC_ROC,Threshold,N_eval,N_botnet,N_normal
+488,0,0,36,0.9313,1.0,0.9313,0.9644,0.0,0.0687,0.0,,0.0704,524,524,0
