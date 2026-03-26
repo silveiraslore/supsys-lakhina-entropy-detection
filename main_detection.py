@@ -19,7 +19,17 @@ from pathlib import Path
 import time
 import json
 
-from preprocessing.loader import load_binetflow, clean_dataframe, split_dataset
+from preprocessing.loader import (
+    DEFAULT_TRAIN_RATIO,
+    DEFAULT_VAL_RATIO,
+    clean_dataframe,
+    get_split_paths,
+    load_binetflow,
+    load_split_metadata,
+    save_splits,
+    split_dataset,
+    split_metadata_is_compatible,
+)
 from detection.lakhina_entropy import LakhinaEntropyDetector
 from evaluation.metrics import DetectionEvaluator
 
@@ -33,17 +43,33 @@ CONFIG = {
     'results_dir':   'results/',
 
     # Paramètres du détecteur
+    'feature_columns': ('DstAddr', 'Dport', 'Sport', 'Proto', 'State', 'Dir'),
+    'model_name': 'hist_gb',
     'window_seconds': 60,    # Taille de la fenêtre temporelle en secondes
-    'n_components':   2,     # Nb de composantes PCA pour le trafic normal
-    'min_flows':      5,     # Nb minimum de flows par IP source
+    'n_components':   2,     # Utilisé seulement en mode PCA legacy
+    'min_flows':      3,     # Nb minimum de flows par IP source
 
     # Seuil initial (sera calibré sur le val set)
     'threshold_init': 0.5,
+    'calibration_metric': 'f1',
+    'n_thresholds': 200,
+    'calibration_max_fpr': 0.40,
+    'calibration_min_precision': None,
+    'calibration_min_recall': None,
 
     # Splits (si les fichiers parquet n'existent pas, on recharge depuis le CSV)
-    'train_ratio': 0.70,
-    'val_ratio':   0.15,
+    'train_ratio': DEFAULT_TRAIN_RATIO,
+    'val_ratio':   DEFAULT_VAL_RATIO,
     # → test_ratio = 0.20 implicitement
+
+    # Sélection de modèle sur validation.
+    'selection_metric': 'F1',
+    'candidate_models': [
+        {'model_name': 'logreg', 'window_seconds': 60, 'min_flows': 3},
+        {'model_name': 'random_forest', 'window_seconds': 60, 'min_flows': 3},
+        {'model_name': 'hist_gb', 'window_seconds': 60, 'min_flows': 3},
+        {'model_name': 'hist_gb', 'window_seconds': 60, 'min_flows': 5},
+    ],
 }
 
 
@@ -54,12 +80,21 @@ def load_splits(config: dict) -> tuple:
     Charge les splits train/val/test.
     Priorité : fichiers Parquet (rapides) → sinon recharge le CSV complet.
     """
-    splits_dir = Path(config['splits_dir'])
-    train_path = splits_dir / 'train.parquet'
-    val_path   = splits_dir / 'val.parquet'
-    test_path  = splits_dir / 'test.parquet'
+    split_paths = get_split_paths(config['splits_dir'])
+    train_path = split_paths['train']
+    val_path   = split_paths['val']
+    test_path  = split_paths['test']
+    metadata   = load_split_metadata(config['splits_dir'])
 
-    if train_path.exists() and val_path.exists() and test_path.exists():
+    splits_exist = train_path.exists() and val_path.exists() and test_path.exists()
+    metadata_ok, metadata_reasons = split_metadata_is_compatible(
+        metadata=metadata,
+        source_path=config['dataset_path'],
+        train_ratio=config['train_ratio'],
+        val_ratio=config['val_ratio'],
+    )
+
+    if splits_exist and metadata_ok:
         print("[LOAD] Chargement des splits depuis les fichiers Parquet...")
         df_train = pd.read_parquet(train_path)
         df_val   = pd.read_parquet(val_path)
@@ -70,7 +105,12 @@ def load_splits(config: dict) -> tuple:
         print(f"  Test  : {len(df_test):>8,} flows")
 
     else:
-        print("[LOAD] Fichiers Parquet introuvables.")
+        if splits_exist:
+            print("[LOAD] Splits présents mais obsolètes.")
+            for reason in metadata_reasons:
+                print(f"       - {reason}")
+        else:
+            print("[LOAD] Fichiers Parquet introuvables.")
         print("[LOAD] Rechargement depuis le fichier source...")
 
         df_raw   = load_binetflow(config['dataset_path'])
@@ -82,11 +122,16 @@ def load_splits(config: dict) -> tuple:
         )
 
         # Sauvegarder pour les prochaines fois
-        splits_dir.mkdir(parents=True, exist_ok=True)
-        df_train.to_parquet(train_path)
-        df_val.to_parquet(val_path)
-        df_test.to_parquet(test_path)
-        print("[LOAD] Splits sauvegardés en Parquet.")
+        save_splits(
+            df_train=df_train,
+            df_val=df_val,
+            df_test=df_test,
+            splits_dir=config['splits_dir'],
+            source_path=config['dataset_path'],
+            train_ratio=config['train_ratio'],
+            val_ratio=config['val_ratio'],
+        )
+        print("[LOAD] Splits sauvegardés en Parquet avec métadonnée.")
 
     return df_train, df_val, df_test
 
@@ -107,6 +152,101 @@ def print_split_overview(df_train, df_val, df_test):
             f"Background={bg:>6,} ({bg/total*100:4.1f}%)"
         )
     print()
+
+
+def select_best_detector(df_train: pd.DataFrame,
+                         df_val: pd.DataFrame,
+                         config: dict) -> tuple[LakhinaEntropyDetector, dict]:
+    """
+    Entraîne plusieurs variantes légères du détecteur et retient la meilleure
+    sur le validation set.
+    """
+    candidates = config.get('candidate_models') or [{
+        'model_name': config['model_name'],
+        'window_seconds': config['window_seconds'],
+        'n_components': config['n_components'],
+        'min_flows': config['min_flows'],
+    }]
+
+    print("[SELECT] Sélection du meilleur modèle sur validation...")
+    records = []
+    best = None
+
+    for idx, candidate in enumerate(candidates, start=1):
+        params = {
+            'model_name': candidate.get('model_name', config['model_name']),
+            'window_seconds': candidate['window_seconds'],
+            'n_components': candidate.get('n_components', config['n_components']),
+            'min_flows': candidate['min_flows'],
+        }
+
+        print(
+            f"[SELECT] Candidat {idx}/{len(candidates)} | "
+            f"model={params['model_name']} | "
+            f"window={params['window_seconds']}s | "
+            f"pca={params['n_components']} | "
+            f"min_flows={params['min_flows']}"
+        )
+
+        detector = LakhinaEntropyDetector(
+            window_seconds=params['window_seconds'],
+            n_components=params['n_components'],
+            threshold=config['threshold_init'],
+            min_flows=params['min_flows'],
+            feature_columns=tuple(config['feature_columns']),
+            model_name=params['model_name'],
+        )
+        detector.fit(df_train)
+
+        threshold = detector.calibrate_threshold(
+            df_val,
+            metric=config['calibration_metric'],
+            n_thresholds=config['n_thresholds'],
+            max_fpr=config['calibration_max_fpr'],
+            min_precision=config['calibration_min_precision'],
+            min_recall=config['calibration_min_recall'],
+        )
+
+        val_results = detector.predict(df_val)
+        val_eval = DetectionEvaluator(val_results, threshold=threshold)
+        val_metrics = val_eval.compute_metrics()
+
+        record = {
+            **params,
+            'threshold': float(threshold),
+            'val_metrics': val_metrics,
+            'detector': detector,
+        }
+        records.append(record)
+
+        print(
+            "[SELECT] Validation | "
+            f"F1={val_metrics['F1']:.4f} | "
+            f"Precision={val_metrics['Precision']:.4f} | "
+            f"Recall={val_metrics['Recall']:.4f} | "
+            f"FPR={val_metrics['FPR']:.4f} | "
+            f"AUC={val_metrics['AUC_ROC']:.4f}"
+        )
+
+        if best is None:
+            best = record
+            continue
+
+        current_score = record['val_metrics'][config['selection_metric']]
+        best_score = best['val_metrics'][config['selection_metric']]
+        if current_score > best_score:
+            best = record
+        elif current_score == best_score and record['val_metrics']['FPR'] < best['val_metrics']['FPR']:
+            best = record
+
+    print("[SELECT] Meilleur candidat retenu : "
+          f"model={best['model_name']} | "
+          f"window={best['window_seconds']}s | "
+          f"pca={best['n_components']} | "
+          f"min_flows={best['min_flows']} | "
+          f"threshold={best['threshold']:.4f}")
+
+    return best['detector'], best
 
 
 def save_config_and_metrics(config: dict,
@@ -150,6 +290,7 @@ def main():
     print_banner("DÉTECTION DE BOTNETS — LAKHINA ENTROPY")
     print(f"  Dataset  : CTU-13 Scénario 9")
     print(f"  Méthode  : Lakhina Entropy (CAMNEP section 3.2.4)")
+    print(f"  Modèle   : {CONFIG['model_name']}")
     print(f"  Fenêtre  : {CONFIG['window_seconds']}s")
     print(f"  PCA k    : {CONFIG['n_components']} composantes")
 
@@ -168,16 +309,21 @@ def main():
 
     t0 = time.time()
 
-    detector = LakhinaEntropyDetector(
-        window_seconds=CONFIG['window_seconds'],
-        n_components=CONFIG['n_components'],
-        threshold=CONFIG['threshold_init'],
-        min_flows=CONFIG['min_flows'],
-    )
+    detector, selection_info = select_best_detector(df_train, df_val, CONFIG)
+    CONFIG['model_name'] = selection_info['model_name']
+    CONFIG['window_seconds'] = selection_info['window_seconds']
+    CONFIG['n_components'] = selection_info['n_components']
+    CONFIG['min_flows'] = selection_info['min_flows']
+    CONFIG['selected_model'] = {
+        'model_name': selection_info['model_name'],
+        'window_seconds': selection_info['window_seconds'],
+        'n_components': selection_info['n_components'],
+        'min_flows': selection_info['min_flows'],
+        'threshold': selection_info['threshold'],
+        'validation_metrics': selection_info['val_metrics'],
+    }
 
-    detector.fit(df_train)
-
-    print(f"\n  Temps d'entraînement : {time.time() - t0:.1f}s")
+    print(f"\n  Temps d'entraînement + sélection : {time.time() - t0:.1f}s")
 
     # ──────────────────────────────────────────────────────────────────────
     # ÉTAPE 3 — Calibration du seuil sur le validation set
@@ -186,11 +332,7 @@ def main():
 
     t0 = time.time()
 
-    optimal_threshold = detector.calibrate_threshold(
-        df_val,
-        metric='f1',        # On optimise le F1-score
-        n_thresholds=200,   # 200 seuils testés entre min et max score
-    )
+    optimal_threshold = detector.threshold
 
     print(f"\n  Seuil optimal retenu : {optimal_threshold:.4f}")
     print(f"  Temps de calibration : {time.time() - t0:.1f}s")
@@ -327,7 +469,8 @@ def _plot_calibration_curve(df_cal: pd.DataFrame,
     filepath = Path(save_dir) / 'threshold_calibration.png'
     fig.savefig(filepath, bbox_inches='tight')
     print(f"[INFO] Calibration sauvegardée : {filepath}")
-    plt.show()
+    if 'agg' not in plt.get_backend().lower():
+        plt.show()
 
 
 # ── Point d'entrée ────────────────────────────────────────────────────────────

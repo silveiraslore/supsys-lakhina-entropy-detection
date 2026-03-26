@@ -21,13 +21,19 @@ on sépare la partie "normale" (modélisée) de la partie "résiduelle" (anomali
 Le score d'anomalie est la norme du vecteur résiduel, normalisé dans [0, 1].
 """
 
+import os
+
 import numpy as np
 import pandas as pd
+
+# Évite le warning joblib/loky sur macOS quand le nombre de cœurs physiques
+# n'est pas détectable correctement.
+os.environ.setdefault('LOKY_MAX_CPU_COUNT', '1')
+
 from sklearn.decomposition import PCA
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from pathlib import Path
-import warnings
-warnings.filterwarnings('ignore')
 
 
 # ── Constantes ────────────────────────────────────────────────────────────────
@@ -45,6 +51,29 @@ DEFAULT_THRESHOLD = 0.5
 
 # Nombre minimum de flows par IP source pour calculer une entropie fiable
 MIN_FLOWS_PER_IP = 5
+
+# Features d'entropie utilisées par défaut. Elles restent proches de l'esprit
+# Lakhina/CAMNEP tout en décrivant mieux le comportement réseau qu'un triplet
+# limité aux seules IP/ports.
+DEFAULT_FEATURE_COLUMNS = (
+    'DstAddr',
+    'Dport',
+    'Sport',
+    'Proto',
+    'State',
+    'Dir',
+)
+
+DEFAULT_MODEL_NAME = 'hist_gb'
+
+FEATURE_LABELS = {
+    'DstAddr': 'H_dst_ip',
+    'Dport': 'H_dst_port',
+    'Sport': 'H_src_port',
+    'Proto': 'H_proto',
+    'State': 'H_state',
+    'Dir': 'H_dir',
+}
 
 
 # ── Classe principale ─────────────────────────────────────────────────────────
@@ -68,7 +97,9 @@ class LakhinaEntropyDetector:
                  window_seconds: int = DEFAULT_WINDOW_SECONDS,
                  n_components: int = DEFAULT_N_COMPONENTS,
                  threshold: float = DEFAULT_THRESHOLD,
-                 min_flows: int = MIN_FLOWS_PER_IP):
+                 min_flows: int = MIN_FLOWS_PER_IP,
+                 feature_columns: tuple[str, ...] | None = None,
+                 model_name: str = DEFAULT_MODEL_NAME):
         """
         Args:
             window_seconds : durée de chaque fenêtre temporelle (secondes)
@@ -80,16 +111,35 @@ class LakhinaEntropyDetector:
         self.n_components   = n_components
         self.threshold      = threshold
         self.min_flows      = min_flows
+        self.feature_columns = tuple(feature_columns or DEFAULT_FEATURE_COLUMNS)
+        self.model_name = model_name
+
+        if self.n_components <= 0:
+            raise ValueError("n_components doit être strictement positif.")
+        if self.min_flows <= 0:
+            raise ValueError("min_flows doit être strictement positif.")
+        if not self.feature_columns:
+            raise ValueError("Au moins une feature d'entropie est requise.")
+        if self.model_name == 'pca' and self.n_components >= len(self.feature_columns):
+            raise ValueError(
+                "n_components doit rester strictement inférieur au nombre "
+                f"de features ({len(self.feature_columns)})."
+            )
 
         # Objets entraînés (remplis lors du fit)
         self.scaler_        = StandardScaler()
         self.pca_           = PCA(n_components=n_components)
+        self.model_         = None
         self.is_fitted_     = False
+        self.feature_names_ = [
+            FEATURE_LABELS.get(col, f"H_{col.lower()}")
+            for col in self.feature_columns
+        ]
 
         # Statistiques pour normaliser le score résiduel dans [0, 1]
         self._residual_mean = None
         self._residual_std  = None
-        self._residual_max  = None
+        self._train_residuals_sorted = None
 
     # ── Étape 1 : Entraînement ─────────────────────────────────────────────
 
@@ -108,6 +158,10 @@ class LakhinaEntropyDetector:
             self (pour le chaînage)
         """
         print("[FIT] Démarrage de l'entraînement Lakhina Entropy...")
+        self._validate_input_columns(df_train)
+
+        if self.model_name != 'pca':
+            return self._fit_supervised(df_train)
 
         # CORRECTION : entraîner uniquement sur le trafic non-botnet
         # Le PCA doit apprendre ce qu'est le trafic NORMAL/BACKGROUND
@@ -141,17 +195,70 @@ class LakhinaEntropyDetector:
         residuals = self._compute_residuals(X_scaled)
         self._residual_mean = np.mean(residuals)
         self._residual_std  = np.std(residuals) + 1e-10
-        self._residual_max  = np.percentile(residuals, 99)
+        self._train_residuals_sorted = np.sort(residuals)
 
         self.is_fitted_ = True
 
         # Afficher la variance expliquée
         var_explained = np.sum(self.pca_.explained_variance_ratio_) * 100
         print(f"[FIT] PCA entraîné sur {len(feature_matrix)} vecteurs d'entropie")
+        print(f"[FIT] Features utilisées : {', '.join(self.feature_names_)}")
         print(f"[FIT] Variance expliquée par {self.n_components} composantes : "
             f"{var_explained:.1f}%")
         print(f"[FIT] Résidu moyen (train) : {self._residual_mean:.4f} "
             f"± {self._residual_std:.4f}")
+        print("[FIT] Entraînement terminé ✓")
+
+        return self
+
+    def _fit_supervised(self, df_train: pd.DataFrame) -> 'LakhinaEntropyDetector':
+        """
+        Entraîne un classifieur supervisé sur les vecteurs d'entropie agrégés.
+
+        Le détecteur reste fondé sur les features de Lakhina, mais remplace le
+        scoring PCA par un modèle mieux adapté au dataset étiqueté.
+        """
+        if 'Label' not in df_train.columns:
+            raise ValueError(
+                "Le mode supervisé nécessite les labels d'entraînement."
+            )
+
+        feature_matrix, metadata = self._build_feature_matrix(
+            df_train,
+            label="FIT",
+            return_metadata=True,
+        )
+        if len(feature_matrix) == 0:
+            raise ValueError("Aucun vecteur d'entropie disponible pour l'entraînement.")
+
+        y_train = (metadata['true_label'] == 'Botnet').astype(int).values
+        if len(np.unique(y_train)) < 2:
+            raise ValueError(
+                "Le train agrégé ne contient pas les deux classes Botnet et Non-Botnet."
+            )
+
+        self.model_ = self._make_estimator()
+        X_model = self._prepare_features_for_training(feature_matrix, fit=True)
+        self.model_.fit(X_model, y_train)
+        self.is_fitted_ = True
+
+        train_scores = self._predict_scores_from_features(feature_matrix)
+        botnet_scores = train_scores[y_train == 1]
+        non_botnet_scores = train_scores[y_train == 0]
+
+        print(f"[FIT] Modèle supervisé entraîné sur {len(feature_matrix)} vecteurs d'entropie")
+        print(f"[FIT] Modèle utilisé : {self.model_name}")
+        print(f"[FIT] Features utilisées : {', '.join(self.feature_names_)}")
+        print(
+            "[FIT] Répartition train agrégée : "
+            f"Botnet={int(y_train.sum()):,} | "
+            f"Non-Botnet={int((y_train == 0).sum()):,}"
+        )
+        print(
+            "[FIT] Score moyen train : "
+            f"Botnet={botnet_scores.mean():.4f} | "
+            f"Non-Botnet={non_botnet_scores.mean():.4f}"
+        )
         print("[FIT] Entraînement terminé ✓")
 
         return self
@@ -181,6 +288,7 @@ class LakhinaEntropyDetector:
             raise RuntimeError("Le modèle n'est pas entraîné. Appelez fit() d'abord.")
 
         print("[PREDICT] Calcul des scores d'anomalie...")
+        self._validate_input_columns(df)
 
         # 1. Construire la matrice de features
         feature_matrix, metadata = self._build_feature_matrix(
@@ -191,20 +299,18 @@ class LakhinaEntropyDetector:
             print("[WARN] Aucun vecteur d'entropie calculable sur ces données.")
             return pd.DataFrame()
 
-        # 2. Normaliser avec le scaler entraîné (pas de re-fit !)
-        X_scaled = self.scaler_.transform(feature_matrix)
-
-        # 3. Calculer les résidus PCA
-        residuals = self._compute_residuals(X_scaled)
-
-        # 4. Normaliser le score dans [0, 1]
-        anomaly_scores = self._normalize_scores(residuals)
+        if self.model_name == 'pca':
+            X_scaled = self.scaler_.transform(feature_matrix)
+            residuals = self._compute_residuals(X_scaled)
+            anomaly_scores = self._normalize_scores(residuals)
+        else:
+            residuals = np.full(len(feature_matrix), np.nan, dtype=np.float64)
+            anomaly_scores = self._predict_scores_from_features(feature_matrix)
 
         # 5. Assembler les résultats
         results = metadata.copy()
-        results['H_dst_ip']      = feature_matrix[:, 0]
-        results['H_dst_port']    = feature_matrix[:, 1]
-        results['H_src_port']    = feature_matrix[:, 2]
+        for idx, feature_name in enumerate(self.feature_names_):
+            results[feature_name] = feature_matrix[:, idx]
         results['residual']      = residuals
         results['anomaly_score'] = anomaly_scores
         results['is_anomaly']    = anomaly_scores > self.threshold
@@ -221,7 +327,10 @@ class LakhinaEntropyDetector:
     def calibrate_threshold(self,
                              df_val: pd.DataFrame,
                              metric: str = 'f1',
-                             n_thresholds: int = 100) -> float:
+                             n_thresholds: int = 100,
+                             max_fpr: float | None = None,
+                             min_precision: float | None = None,
+                             min_recall: float | None = None) -> float:
         """
         Cherche le seuil optimal sur le dataset de validation.
         
@@ -244,10 +353,26 @@ class LakhinaEntropyDetector:
         y_true = (results['true_label'] == 'Botnet').astype(int)
         scores = results['anomaly_score'].values
 
-        best_threshold = self.threshold
-        best_score     = 0.0
+        metric_functions = {
+            'f1': lambda r: r['f1'],
+            'precision': lambda r: r['precision'],
+            'recall': lambda r: r['recall'],
+            'balanced_accuracy': lambda r: r['balanced_accuracy'],
+            'mcc': lambda r: r['mcc'],
+        }
+        if metric not in metric_functions:
+            raise ValueError(
+                f"Métrique de calibration inconnue : {metric}. "
+                f"Choix valides : {sorted(metric_functions)}"
+            )
 
-        thresholds = np.linspace(scores.min(), scores.max(), n_thresholds)
+        best_record = None
+        fallback_record = None
+
+        if np.allclose(scores.min(), scores.max()):
+            thresholds = np.array([scores.min()])
+        else:
+            thresholds = np.linspace(scores.min(), scores.max(), n_thresholds)
 
         records = []
         for t in thresholds:
@@ -261,28 +386,53 @@ class LakhinaEntropyDetector:
             recall    = tp / (tp + fn + 1e-10)
             f1        = 2 * precision * recall / (precision + recall + 1e-10)
             fpr       = fp / (fp + tn + 1e-10)
+            tnr       = tn / (tn + fp + 1e-10)
+            balanced_accuracy = 0.5 * (recall + tnr)
+            denom = np.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) + 1e-10
+            mcc = ((tp * tn) - (fp * fn)) / denom
 
-            records.append({
+            record = {
                 'threshold': t,
                 'precision': precision,
                 'recall': recall,
                 'f1': f1,
                 'fpr': fpr,
+                'tnr': tnr,
+                'balanced_accuracy': balanced_accuracy,
+                'mcc': mcc,
                 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn
-            })
+            }
+            records.append(record)
 
-            current = {'f1': f1, 'precision': precision, 'recall': recall}[metric]
-            if current > best_score:
-                best_score     = current
-                best_threshold = t
+            current = metric_functions[metric](record)
 
-        self.threshold         = best_threshold
+            if fallback_record is None or current > metric_functions[metric](fallback_record):
+                fallback_record = record
+
+            constraints_ok = True
+            if max_fpr is not None and fpr > max_fpr:
+                constraints_ok = False
+            if min_precision is not None and precision < min_precision:
+                constraints_ok = False
+            if min_recall is not None and recall < min_recall:
+                constraints_ok = False
+
+            if constraints_ok:
+                if best_record is None or current > metric_functions[metric](best_record):
+                    best_record = record
+
+        if best_record is None:
+            best_record = fallback_record
+            print("[CALIBRATE] Aucun seuil ne respecte les contraintes demandées. "
+                  "Retour au meilleur seuil non contraint.")
+
+        self.threshold         = float(best_record['threshold'])
         self._calibration_data = pd.DataFrame(records)
 
-        print(f"[CALIBRATE] Seuil optimal trouvé : {best_threshold:.4f} "
-              f"({metric} = {best_score:.4f})")
+        print(f"[CALIBRATE] Seuil optimal trouvé : {self.threshold:.4f} "
+              f"({metric} = {metric_functions[metric](best_record):.4f})")
 
-        return best_threshold
+        return self.threshold
 
     # ── Méthodes internes ──────────────────────────────────────────────────
 
@@ -299,6 +449,8 @@ class LakhinaEntropyDetector:
         C'est le cœur de la méthode Lakhina Entropy.
         """
         df = df.copy()
+        df = df.dropna(subset=['StartTime', 'SrcAddr'])
+        self._validate_input_columns(df)
         df = df.sort_values('StartTime')
 
         # Créer un identifiant de fenêtre temporelle
@@ -329,11 +481,12 @@ class LakhinaEntropyDetector:
 
                 # ── Calcul des 3 entropies ──
 
-                h_dst_ip   = self._entropy(group_ip['DstAddr'])
-                h_dst_port = self._entropy(group_ip['Dport'].dropna())
-                h_src_port = self._entropy(group_ip['Sport'].dropna())
+                feature_vector = [
+                    self._entropy(group_ip[column].dropna())
+                    for column in self.feature_columns
+                ]
 
-                feature_vectors.append([h_dst_ip, h_dst_port, h_src_port])
+                feature_vectors.append(feature_vector)
 
                 # Déterminer le label ground-truth de cette IP dans cette fenêtre
                 if 'Label' in group_ip.columns:
@@ -394,23 +547,93 @@ class LakhinaEntropyDetector:
 
     def _normalize_scores(self, residuals: np.ndarray) -> np.ndarray:
         """
-        Normalise les scores résiduels dans [0, 1].
-        
-        Score proche de 0 = comportement normal.
-        Score proche de 1 = forte anomalie.
-        
-        CORRECTION : on inverse le score car le Botnet a des résidus
-        FAIBLES (comportement répétitif, bien modélisé par le PCA)
-        et le Background a des résidus ÉLEVÉS (comportement varié).
-        L'inversion fait que Botnet → score élevé → détection correcte.
+        Convertit les résidus en score dans [0, 1].
+
+        Sur ce scénario, les comportements botnet sont plus réguliers que le
+        trafic non-botnet de référence. On transforme donc les résidus via la
+        CDF empirique du train : plus le résidu est faible par rapport au train,
+        plus le score de détection est élevé.
         """
-        scores = residuals / (self._residual_max + 1e-10)
-        scores = np.clip(scores, 0.0, 1.0)
+        if self._train_residuals_sorted is None or len(self._train_residuals_sorted) == 0:
+            raise RuntimeError(
+                "Les résidus d'entraînement sont absents. Appelez fit() avant predict()."
+            )
 
-        # Inversion du score
-        scores = 1.0 - scores
+        ranks = np.searchsorted(
+            self._train_residuals_sorted,
+            residuals,
+            side='right',
+        )
+        empirical_cdf = ranks / len(self._train_residuals_sorted)
+        scores = 1.0 - empirical_cdf
 
-        return scores
+        return np.clip(scores, 0.0, 1.0)
+
+    def _make_estimator(self):
+        """Construit le modèle supervisé demandé."""
+        if self.model_name == 'logreg':
+            return LogisticRegression(
+                max_iter=1000,
+                class_weight='balanced',
+            )
+        if self.model_name == 'random_forest':
+            return RandomForestClassifier(
+                n_estimators=300,
+                random_state=42,
+                class_weight='balanced_subsample',
+                min_samples_leaf=2,
+                n_jobs=1,
+            )
+        if self.model_name == 'hist_gb':
+            return HistGradientBoostingClassifier(
+                max_depth=6,
+                learning_rate=0.05,
+                max_iter=300,
+                random_state=42,
+            )
+        if self.model_name == 'pca':
+            return None
+        raise ValueError(
+            f"model_name inconnu : {self.model_name}. "
+            "Choix valides : ['hist_gb', 'logreg', 'pca', 'random_forest']"
+        )
+
+    def _prepare_features_for_training(self,
+                                       feature_matrix: np.ndarray,
+                                       fit: bool = False) -> np.ndarray:
+        """Prépare les features selon le type de modèle choisi."""
+        if self.model_name == 'logreg':
+            if fit:
+                return self.scaler_.fit_transform(feature_matrix)
+            return self.scaler_.transform(feature_matrix)
+        return feature_matrix
+
+    def _predict_scores_from_features(self, feature_matrix: np.ndarray) -> np.ndarray:
+        """Retourne un score de détection continu dans [0, 1]."""
+        if self.model_name == 'pca':
+            X_scaled = self.scaler_.transform(feature_matrix)
+            residuals = self._compute_residuals(X_scaled)
+            return self._normalize_scores(residuals)
+
+        if self.model_ is None:
+            raise RuntimeError("Le classifieur n'est pas entraîné. Appelez fit() d'abord.")
+
+        X_model = self._prepare_features_for_training(feature_matrix, fit=False)
+        if hasattr(self.model_, 'predict_proba'):
+            return self.model_.predict_proba(X_model)[:, 1]
+
+        raw_scores = self.model_.decision_function(X_model)
+        return 1.0 / (1.0 + np.exp(-raw_scores))
+
+    def _validate_input_columns(self, df: pd.DataFrame):
+        """Vérifie que le DataFrame contient les colonnes nécessaires au détecteur."""
+        required_columns = {'StartTime', 'SrcAddr', *self.feature_columns}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            raise ValueError(
+                "Colonnes manquantes pour LakhinaEntropyDetector : "
+                f"{sorted(missing_columns)}"
+            )
 
     @staticmethod
     def _entropy(series: pd.Series) -> float:

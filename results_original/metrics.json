@@ -1,0 +1,17 @@
+{
+  "TP": 8,
+  "TN": 3404,
+  "FP": 10,
+  "FN": 2,
+  "FPR": 0.0029291154071470417,
+  "Recall": 0.8,
+  "Precision": 0.4444444444444444,
+  "Accuracy": 0.9964953271028038,
+  "F1": 0.5714285714285714,
+  "N_eval": 3424,
+  "N_botnet": 10,
+  "N_normal": 3414,
+  "ThresholdMajor": 121.10871421071522,
+  "ThresholdMinor": 44.356866888875075,
+  "results_dir": "results_original"
+}

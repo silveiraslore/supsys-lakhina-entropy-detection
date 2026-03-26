@@ -11,17 +11,23 @@ Métriques calculées :
     - Métriques temporelles (inspirées de la section 7.2 de l'article)
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+_MPL_CONFIG_DIR = Path('.mpl-cache')
+_MPL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault('MPLCONFIGDIR', str(_MPL_CONFIG_DIR.resolve()))
+os.environ.setdefault('MPLBACKEND', 'Agg')
+
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import seaborn as sns
 from sklearn.metrics import (
     roc_curve, auc,
     precision_recall_curve,
-    confusion_matrix,
+    average_precision_score,
 )
-from pathlib import Path
 
 
 # ── Style global ──────────────────────────────────────────────────────────────
@@ -36,6 +42,7 @@ COLORS = {
     'Botnet':     '#e74c3c',
     'Normal':     '#2ecc71',
     'Background': '#95a5a6',
+    'Non-Botnet': '#2ecc71',
     'detector':   '#3498db',
 }
 
@@ -73,28 +80,30 @@ class DetectionEvaluator:
 
         self.results   = results.copy()
         self.threshold = threshold
+        self.results['is_anomaly'] = self.results['anomaly_score'] > self.threshold
 
-        # Filtrer le Background pour l'évaluation binaire
-        # (comme dans l'article : on évalue uniquement Botnet vs Normal)
-        # APRÈS — on inclut Background comme "Non-Botnet"
+        self._unit_label = 'observations agrégées (fenêtre × IP source)'
+
+        # Évaluation binaire honnête : Botnet vs Non-Botnet.
         self._df_eval = results.copy()
+        self._df_eval['is_anomaly'] = self._df_eval['anomaly_score'] > self.threshold
+        self._df_eval = self._df_eval[self._df_eval['true_label'].notna()].copy()
         self._df_eval['true_label_binary'] = self._df_eval['true_label'].apply(
-            lambda x: 'Botnet' if x == 'Botnet' else 'Normal'
+            lambda x: 'Botnet' if x == 'Botnet' else 'Non-Botnet'
         )
+        self._background_count = int((self._df_eval['true_label'] == 'Background').sum())
+        self._normal_count = int((self._df_eval['true_label'] == 'Normal').sum())
         self._df_eval['true_label'] = self._df_eval['true_label_binary']
-        self._df_eval = self._df_eval[
-            self._df_eval['true_label'].isin(['Botnet', 'Normal'])
-        ]
 
         if len(self._df_eval) == 0:
             raise ValueError(
-                "Aucune ligne Botnet ou Normal dans les résultats. "
+                "Aucune ligne évaluable dans les résultats. "
                 "Impossible d'évaluer."
             )
 
-        # Labels binaires : 1 = Botnet, 0 = Normal
+        # Labels binaires : 1 = Botnet, 0 = Non-Botnet
         self._y_true  = (self._df_eval['true_label'] == 'Botnet').astype(int).values
-        self._y_pred  = self._df_eval['is_anomaly'].astype(int).values
+        self._y_pred  = (self._df_eval['anomaly_score'] > self.threshold).astype(int).values
         self._scores  = self._df_eval['anomaly_score'].values
 
     # ── Métriques de base ─────────────────────────────────────────────────
@@ -131,8 +140,10 @@ class DetectionEvaluator:
         if len(np.unique(self._y_true)) > 1:
             fpr_curve, tpr_curve, _ = roc_curve(self._y_true, self._scores)
             roc_auc = auc(fpr_curve, tpr_curve)
+            pr_auc = average_precision_score(self._y_true, self._scores)
         else:
             roc_auc = float('nan')
+            pr_auc = float('nan')
 
         return {
             'TP':        tp,
@@ -147,10 +158,13 @@ class DetectionEvaluator:
             'FNR':       round(fnr,       4),
             'TNR':       round(tnr,       4),
             'AUC_ROC':   round(roc_auc,   4),
+            'PR_AUC':    round(pr_auc,    4),
             'Threshold': round(self.threshold, 4),
             'N_eval':    total,
             'N_botnet':  int(np.sum(self._y_true == 1)),
-            'N_normal':  int(np.sum(self._y_true == 0)),
+            'N_non_botnet': int(np.sum(self._y_true == 0)),
+            'N_background': self._background_count,
+            'N_normal': self._normal_count,
         }
 
     # ── Rapport texte ─────────────────────────────────────────────────────
@@ -163,18 +177,20 @@ class DetectionEvaluator:
         print("  RAPPORT DE PERFORMANCE — LAKHINA ENTROPY DETECTOR")
         print("=" * 60)
 
-        print(f"\n  Dataset évalué (Botnet + Normal uniquement) :")
-        print(f"    Total flows  : {metrics['N_eval']:>8,}")
+        print(f"\n  Dataset évalué ({self._unit_label}) :")
+        print(f"    Total        : {metrics['N_eval']:>8,}")
         print(f"    Botnet       : {metrics['N_botnet']:>8,} "
               f"({metrics['N_botnet']/metrics['N_eval']*100:.1f}%)")
-        print(f"    Normal       : {metrics['N_normal']:>8,} "
-              f"({metrics['N_normal']/metrics['N_eval']*100:.1f}%)")
+        print(f"    Non-Botnet   : {metrics['N_non_botnet']:>8,} "
+              f"({metrics['N_non_botnet']/metrics['N_eval']*100:.1f}%)")
+        print(f"      Background : {metrics['N_background']:>8,}")
+        print(f"      Normal     : {metrics['N_normal']:>8,}")
 
         print(f"\n  Seuil utilisé : {metrics['Threshold']}")
 
         print("\n  ── Matrice de confusion ──")
         print(f"    TP (Botnet détecté)    : {metrics['TP']:>8,}")
-        print(f"    TN (Normal correct)    : {metrics['TN']:>8,}")
+        print(f"    TN (Non-Botnet correct): {metrics['TN']:>8,}")
         print(f"    FP (Fausse alarme)     : {metrics['FP']:>8,}")
         print(f"    FN (Botnet manqué)     : {metrics['FN']:>8,}")
 
@@ -192,8 +208,9 @@ class DetectionEvaluator:
             ('F1-Score',  metrics['F1'],        'Moyenne harmonique Precision/Recall'),
             ('FPR',       metrics['FPR'],       'Taux de fausses alarmes'),
             ('FNR',       metrics['FNR'],       'Taux de botnets manqués'),
-            ('TNR',       metrics['TNR'],       'Taux de normaux correctement classés'),
+            ('TNR',       metrics['TNR'],       'Taux de non-botnets correctement classés'),
             ('AUC-ROC',   metrics['AUC_ROC'],   'Aire sous la courbe ROC'),
+            ('PR-AUC',    metrics['PR_AUC'],    'Average precision sur la courbe PR'),
         ]
 
         for name, val, desc in metrics_display:
@@ -260,10 +277,10 @@ class DetectionEvaluator:
             fmt='d',
             cmap='Blues',
             ax=ax,
-            xticklabels=['Prédit Normal', 'Prédit Botnet'],
-            yticklabels=['Réel Normal',   'Réel Botnet'],
+            xticklabels=['Prédit Non-Botnet', 'Prédit Botnet'],
+            yticklabels=['Réel Non-Botnet',   'Réel Botnet'],
             linewidths=1,
-            cbar_kws={'label': 'Nombre de flows'},
+            cbar_kws={'label': 'Nombre d’observations'},
         )
 
         # Annotations supplémentaires
@@ -283,7 +300,7 @@ class DetectionEvaluator:
 
         plt.tight_layout()
         _save_fig(fig, save_dir, 'confusion_matrix.png')
-        plt.show()
+        _maybe_show()
 
     def plot_roc_curve(self, save_dir: str = 'results/'):
         """Trace la courbe ROC."""
@@ -323,7 +340,7 @@ class DetectionEvaluator:
 
         plt.tight_layout()
         _save_fig(fig, save_dir, 'roc_curve.png')
-        plt.show()
+        _maybe_show()
 
     def plot_precision_recall_curve(self, save_dir: str = 'results/'):
         """Trace la courbe Precision-Recall."""
@@ -331,10 +348,10 @@ class DetectionEvaluator:
             print("[WARN] PR curve impossible : un seul label dans les données.")
             return
 
-        precisions, recalls, thresholds = precision_recall_curve(
+        precisions, recalls, _ = precision_recall_curve(
             self._y_true, self._scores
         )
-        pr_auc = auc(recalls, precisions)
+        pr_auc = average_precision_score(self._y_true, self._scores)
 
         fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -364,7 +381,7 @@ class DetectionEvaluator:
 
         plt.tight_layout()
         _save_fig(fig, save_dir, 'precision_recall_curve.png')
-        plt.show()
+        _maybe_show()
 
     def plot_score_distribution(self, save_dir: str = 'results/'):
         """
@@ -374,7 +391,7 @@ class DetectionEvaluator:
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
         # Histogramme
-        for label in ['Botnet', 'Normal']:
+        for label in ['Botnet', 'Non-Botnet']:
             subset = self._df_eval[self._df_eval['true_label'] == label]
             if len(subset) == 0:
                 continue
@@ -399,7 +416,7 @@ class DetectionEvaluator:
         # Box plot
         data_to_plot = []
         labels_plot  = []
-        for label in ['Botnet', 'Normal']:
+        for label in ['Botnet', 'Non-Botnet']:
             subset = self._df_eval[self._df_eval['true_label'] == label]
             if len(subset) > 0:
                 data_to_plot.append(subset['anomaly_score'].values)
@@ -420,7 +437,7 @@ class DetectionEvaluator:
         plt.suptitle('Séparabilité des scores d\'anomalie', fontsize=12)
         plt.tight_layout()
         _save_fig(fig, save_dir, 'score_distribution.png')
-        plt.show()
+        _maybe_show()
 
     def plot_metrics_over_time(self, save_dir: str = 'results/'):
         """
@@ -490,7 +507,7 @@ class DetectionEvaluator:
 
         plt.tight_layout()
         _save_fig(fig, save_dir, 'metrics_over_time.png')
-        plt.show()
+        _maybe_show()
 
     def save_results_csv(self, save_dir: str = 'results/'):
         """Sauvegarde les métriques dans un fichier CSV."""
@@ -513,3 +530,10 @@ def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
     filepath = Path(save_dir) / filename
     fig.savefig(filepath, bbox_inches='tight')
     print(f"[INFO] Figure sauvegardée : {filepath}")
+
+
+def _maybe_show():
+    """Affiche la figure seulement si le backend est interactif."""
+    backend = plt.get_backend().lower()
+    if 'agg' not in backend:
+        plt.show()

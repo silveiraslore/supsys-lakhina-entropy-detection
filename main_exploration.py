@@ -4,7 +4,14 @@ Lancer avec : python main_exploration.py
 """
 
 from pathlib import Path
-from preprocessing.loader import load_binetflow, clean_dataframe, split_dataset
+from preprocessing.loader import (
+    DEFAULT_TRAIN_RATIO,
+    DEFAULT_VAL_RATIO,
+    clean_dataframe,
+    load_binetflow,
+    save_splits,
+    split_dataset,
+)
 from analysis.statistics import (
     print_summary,
     plot_label_distribution,
@@ -21,6 +28,7 @@ from analysis.statistics import (
 # Fichier à télécharger : le fichier .binetflow du scénario 9
 DATASET_PATH = "dataset/9/capture20110817.binetflow"
 RESULTS_DIR  = "results/"
+SPLITS_DIR   = "dataset/9/splits"
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -50,17 +58,27 @@ def main():
                                           save_dir=RESULTS_DIR)
 
     # 6. Division train/val/test  ← splits criados AQUI
-    df_train, df_val, df_test = split_dataset(df,
-                                               train_ratio=0.60,
-                                               val_ratio=0.20)
+    df_train, df_val, df_test = split_dataset(
+        df,
+        train_ratio=DEFAULT_TRAIN_RATIO,
+        val_ratio=DEFAULT_VAL_RATIO,
+    )
 
     # 7. Sauvegarde  ← só depois do split_dataset
     print("\n[INFO] Sauvegarde des splits...")
-    Path("dataset/9/splits").mkdir(parents=True, exist_ok=True)
-    df_train.to_parquet("dataset/9/splits/train.parquet")
-    df_val.to_parquet("dataset/9/splits/val.parquet")
-    df_test.to_parquet("dataset/9/splits/test.parquet")
-    print("[INFO] Splits sauvegardés au format Parquet.")
+    split_paths, _ = save_splits(
+        df_train=df_train,
+        df_val=df_val,
+        df_test=df_test,
+        splits_dir=SPLITS_DIR,
+        source_path=DATASET_PATH,
+        train_ratio=DEFAULT_TRAIN_RATIO,
+        val_ratio=DEFAULT_VAL_RATIO,
+    )
+    print("[INFO] Splits sauvegardés au format Parquet :")
+    for split_name in ('train', 'val', 'test'):
+        print(f"        - {split_name:5s}: {split_paths[split_name]}")
+    print(f"        - meta : {split_paths['metadata']}")
 
     print("\n✅ Exploration terminée. Vérifiez le dossier results/")
 

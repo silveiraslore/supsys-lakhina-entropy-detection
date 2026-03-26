@@ -3,12 +3,19 @@ Module d'analyse statistique et visualisation du dataset CTU-13.
 Responsable : Membre 2
 """
 
+import os
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
+_MPL_CONFIG_DIR = Path('.mpl-cache')
+_MPL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault('MPLCONFIGDIR', str(_MPL_CONFIG_DIR.resolve()))
+os.environ.setdefault('MPLBACKEND', 'Agg')
+
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
-from pathlib import Path
 
 
 # ── Style global ─────────────────────────────────────────────────────────────
@@ -23,6 +30,7 @@ COLORS = {
     'Botnet':     '#e74c3c',
     'Normal':     '#2ecc71',
     'Background': '#95a5a6',
+    'Non-Botnet': '#2ecc71',
 }
 
 
@@ -84,7 +92,7 @@ def plot_label_distribution(df: pd.DataFrame, save_dir: str = 'results/'):
     
     plt.tight_layout()
     _save_fig(fig, save_dir, 'label_distribution.png')
-    plt.show()
+    _maybe_show()
 
 
 def plot_traffic_over_time(df: pd.DataFrame,
@@ -118,23 +126,25 @@ def plot_traffic_over_time(df: pd.DataFrame,
     plt.suptitle('Évolution temporelle du trafic réseau', fontsize=12, y=1.01)
     plt.tight_layout()
     _save_fig(fig, save_dir, 'traffic_over_time.png')
-    plt.show()
+    _maybe_show()
 
 
 def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
     """
-    Compare la distribution des features numériques entre Botnet et Normal.
+    Compare la distribution des features numériques entre Botnet et Non-Botnet.
     Aide à comprendre ce que Lakhina Entropy va mesurer.
     """
     features = ['Dur', 'TotPkts', 'TotBytes', 'SrcBytes']
-    labels_to_compare = ['Botnet', 'Normal']
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()
     
     for ax, feat in zip(axes, features):
-        for label in labels_to_compare:
-            subset = df[df['Label'] == label][feat].dropna()
+        subsets = {
+            'Botnet': df[df['Label'] == 'Botnet'][feat].dropna(),
+            'Non-Botnet': df[df['Label'] != 'Botnet'][feat].dropna(),
+        }
+        for label, subset in subsets.items():
             # Clip les valeurs extrêmes pour la lisibilité
             p99 = subset.quantile(0.99)
             subset_clipped = subset[subset <= p99]
@@ -149,10 +159,10 @@ def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
         ax.legend()
         ax.set_yscale('log')
     
-    plt.suptitle('Distributions des features : Botnet vs Normal', fontsize=12)
+    plt.suptitle('Distributions des features : Botnet vs Non-Botnet', fontsize=12)
     plt.tight_layout()
     _save_fig(fig, save_dir, 'feature_distributions.png')
-    plt.show()
+    _maybe_show()
 
 
 def plot_protocol_by_label(df: pd.DataFrame, save_dir: str = 'results/'):
@@ -176,7 +186,7 @@ def plot_protocol_by_label(df: pd.DataFrame, save_dir: str = 'results/'):
     
     plt.tight_layout()
     _save_fig(fig, save_dir, 'protocol_by_label.png')
-    plt.show()
+    _maybe_show()
 
 
 def compute_entropy_preview(df: pd.DataFrame,
@@ -201,16 +211,13 @@ def compute_entropy_preview(df: pd.DataFrame,
             continue
         
         # Entropie des IP destinations
-        dst_counts = group['DstAddr'].value_counts(normalize=True)
-        h_dst = -np.sum(dst_counts * np.log2(dst_counts + 1e-10))
+        h_dst = _normalized_entropy(group['DstAddr'])
         
         # Entropie des ports destinations
-        dst_port_counts = group['Dport'].dropna().value_counts(normalize=True)
-        h_dport = -np.sum(dst_port_counts * np.log2(dst_port_counts + 1e-10))
+        h_dport = _normalized_entropy(group['Dport'].dropna())
         
         # Entropie des ports sources
-        src_port_counts = group['Sport'].dropna().value_counts(normalize=True)
-        h_sport = -np.sum(src_port_counts * np.log2(src_port_counts + 1e-10))
+        h_sport = _normalized_entropy(group['Sport'].dropna())
         
         # Label dominant dans cette fenêtre
         dominant_label = group['Label'].value_counts().idxmax()
@@ -264,7 +271,7 @@ def compute_entropy_preview(df: pd.DataFrame,
     )
     plt.tight_layout()
     _save_fig(fig, save_dir, 'entropy_preview.png')
-    plt.show()
+    _maybe_show()
     
     return df_ent
 
@@ -277,3 +284,24 @@ def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
     filepath = Path(save_dir) / filename
     fig.savefig(filepath, bbox_inches='tight')
     print(f"[INFO] Figure sauvegardée : {filepath}")
+
+
+def _maybe_show():
+    """Affiche la figure seulement si le backend est interactif."""
+    backend = plt.get_backend().lower()
+    if 'agg' not in backend:
+        plt.show()
+
+
+def _normalized_entropy(series: pd.Series) -> float:
+    """Entropie de Shannon normalisée dans [0, 1]."""
+    if len(series) == 0:
+        return 0.0
+
+    value_counts = series.value_counts(normalize=True)
+    probs = value_counts.values
+    entropy = -np.sum(probs * np.log2(probs + 1e-10))
+    n_unique = len(value_counts)
+    max_entropy = np.log2(n_unique) if n_unique > 1 else 1.0
+
+    return float(entropy / max_entropy) if max_entropy > 0 else 0.0
