@@ -1,6 +1,6 @@
 {
-  "dataset_path": "dataset/9/capture20110817.binetflow",
-  "splits_dir": "dataset/9/splits/",
+  "dataset_path": "data/CTU-13-Dataset/12/*.binetflow",
+  "splits_dir": "data/CTU-13-Dataset/12/splits/",
   "results_dir": "results_original/",
   "train_ratio": 0.6,
   "val_ratio": 0.2,
@@ -16,7 +16,7 @@
   "k_minor": 1,
   "threshold_grid_points": 80,
   "selected_thresholds": {
-    "threshold_major": 121.10871421071522,
-    "threshold_minor": 44.356866888875075
+    "threshold_major": 12.99014990460204,
+    "threshold_minor": 6.152133061436145e-05
   }
 }

@@ -52,6 +52,7 @@ def load_binetflow(filepath: str) -> pd.DataFrame:
     Returns:
         Cleaned pandas DataFrame
     """
+    print(filepath)
     path = Path(filepath)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filepath}")

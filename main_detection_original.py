@@ -22,6 +22,7 @@ import os
 import time
 from collections import Counter
 from pathlib import Path
+import glob
 
 import numpy as np
 import pandas as pd
@@ -51,8 +52,8 @@ from preprocessing.loader import (
 
 
 CONFIG = {
-    'dataset_path': 'dataset/9/capture20110817.binetflow',
-    'splits_dir': 'dataset/9/splits/',
+    'dataset_path': 'data/CTU-13-Dataset/3/*.binetflow',
+    'splits_dir': 'data/CTU-13-Dataset/3/splits/',
     'results_dir': 'results_original/',
     'train_ratio': DEFAULT_TRAIN_RATIO,
     'val_ratio': DEFAULT_VAL_RATIO,
@@ -107,7 +108,7 @@ def load_splits(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         print("[LOAD] Fichiers Parquet introuvables.")
 
     print("[LOAD] Rechargement depuis le fichier source...")
-    df_raw = load_binetflow(config['dataset_path'])
+    df_raw = load_binetflow(glob.glob   (config['dataset_path'])[0])
     df = clean_dataframe(df_raw)
     df_train, df_val, df_test = split_dataset(
         df,

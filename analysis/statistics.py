@@ -131,32 +131,19 @@ def plot_traffic_over_time(df: pd.DataFrame,
 
 def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
     """
-<<<<<<< HEAD
-    Compare la distribution des features numériques entre Botnet et Non-Botnet.
-    Aide à comprendre ce que Lakhina Entropy va mesurer.
-=======
     Compares the distribution of numerical features between Botnet and Normal.
     Helps to understand what Lakhina Entropy will measure.
->>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
     """
     features = ['Dur', 'TotPkts', 'TotBytes', 'SrcBytes']
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()
     
+    labels_to_compare = ['Botnet', 'Normal','Background']
     for ax, feat in zip(axes, features):
-<<<<<<< HEAD
-        subsets = {
-            'Botnet': df[df['Label'] == 'Botnet'][feat].dropna(),
-            'Non-Botnet': df[df['Label'] != 'Botnet'][feat].dropna(),
-        }
-        for label, subset in subsets.items():
-            # Clip les valeurs extrêmes pour la lisibilité
-=======
         for label in labels_to_compare:
             subset = df[df['Label'] == label][feat].dropna()
             # Clip extreme values for readability
->>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
             p99 = subset.quantile(0.99)
             subset_clipped = subset[subset <= p99]
             
@@ -170,11 +157,7 @@ def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
         ax.legend()
         ax.set_yscale('log')
     
-<<<<<<< HEAD
-    plt.suptitle('Distributions des features : Botnet vs Non-Botnet', fontsize=12)
-=======
     plt.suptitle('Feature Distributions: Botnet vs Normal', fontsize=12)
->>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
     plt.tight_layout()
     _save_fig(fig, save_dir, 'feature_distributions.png')
     _maybe_show()
@@ -225,16 +208,6 @@ def compute_entropy_preview(df: pd.DataFrame,
         if len(group) < 10:
             continue
         
-<<<<<<< HEAD
-        # Entropie des IP destinations
-        h_dst = _normalized_entropy(group['DstAddr'])
-        
-        # Entropie des ports destinations
-        h_dport = _normalized_entropy(group['Dport'].dropna())
-        
-        # Entropie des ports sources
-        h_sport = _normalized_entropy(group['Sport'].dropna())
-=======
         # Destination IP Entropy
         dst_counts = group['DstAddr'].value_counts(normalize=True)
         h_dst = -np.sum(dst_counts * np.log2(dst_counts + 1e-10))
@@ -246,7 +219,6 @@ def compute_entropy_preview(df: pd.DataFrame,
         # Source Port Entropy
         src_port_counts = group['Sport'].dropna().value_counts(normalize=True)
         h_sport = -np.sum(src_port_counts * np.log2(src_port_counts + 1e-10))
->>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
         
         # Dominant label in this window
         dominant_label = group['Label'].value_counts().idxmax()
@@ -313,7 +285,6 @@ def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
     filepath = Path(save_dir) / filename
     fig.savefig(filepath, bbox_inches='tight')
     print(f"[INFO] Figure saved: {filepath}")
-��──────────────────────────────────────
 
 def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
     """Sauvegarde une figure dans le dossier results/."""
