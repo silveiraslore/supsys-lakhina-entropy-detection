@@ -1,12 +1,22 @@
 {
-  "dataset_path": "dataset/9/capture20110817.binetflow",
-  "splits_dir": "dataset/9/splits/",
+  "dataset_path": "data/CTU-13-Dataset/9/*.binetflow",
+  "splits_dir": "data/CTU-13-Dataset/9/splits/",
   "results_dir": "results/",
-  "window_seconds": 60,
-  "n_components": 2,
-  "min_flows": 5,
-  "threshold_init": 0.5,
-  "train_ratio": 0.7,
-  "val_ratio": 0.15,
-  "threshold_final": 0.6775810595614202
+  "train_ratio": 0.6,
+  "val_ratio": 0.2,
+  "use_tcp_only": true,
+  "malicious_threshold": 0.0,
+  "pca_feature_columns": [
+    "SrcPortEntropy",
+    "DestPortEntropy",
+    "DestIPEntropy",
+    "FlagEntropy"
+  ],
+  "eigen_threshold": 1e-06,
+  "k_minor": 1,
+  "threshold_grid_points": 80,
+  "selected_thresholds": {
+    "threshold_major": 121.10871421071677,
+    "threshold_minor": 44.35686688886925
+  }
 }

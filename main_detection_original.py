@@ -52,9 +52,9 @@ from preprocessing.loader import (
 
 
 CONFIG = {
-    'dataset_path': 'data/CTU-13-Dataset/3/*.binetflow',
-    'splits_dir': 'data/CTU-13-Dataset/3/splits/',
-    'results_dir': 'results_original/',
+    'dataset_path': 'data/CTU-13-Dataset/9/*.binetflow',
+    'splits_dir': 'data/CTU-13-Dataset/9/splits/',
+    'results_dir': 'results/',
     'train_ratio': DEFAULT_TRAIN_RATIO,
     'val_ratio': DEFAULT_VAL_RATIO,
     'use_tcp_only': True,

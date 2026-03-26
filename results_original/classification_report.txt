@@ -1,8 +1,8 @@
               precision    recall  f1-score   support
 
-      Normal       0.00      0.00      0.00    1602.0
-   Malicieux       0.00      0.00      0.00       0.0
+      Normal       1.00      1.00      1.00     10814
+   Malicieux       1.00      0.50      0.67         2
 
-    accuracy                           0.00    1602.0
-   macro avg       0.00      0.00      0.00    1602.0
-weighted avg       0.00      0.00      0.00    1602.0
+    accuracy                           1.00     10816
+   macro avg       1.00      0.75      0.83     10816
+weighted avg       1.00      1.00      1.00     10816
