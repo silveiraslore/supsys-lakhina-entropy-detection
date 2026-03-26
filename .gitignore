@@ -1,8 +1,5 @@
-<<<<<<< HEAD
 venv/
 __pycache__/
 *.pyc
 data/
-=======
-dataset/9/*
->>>>>>> ed191f3b9e3698d42d73be6bb4ed242e2a61a51e
+dataset/
