@@ -67,93 +67,70 @@ class LakhinaEntropyDetector:
     def __init__(self,
                  window_seconds: int = DEFAULT_WINDOW_SECONDS,
                  n_components: int = DEFAULT_N_COMPONENTS,
-                 threshold: float = DEFAULT_THRESHOLD,
+                 threshold_major: float = 10.0,
+                 threshold_minor: float = 10.0,
                  min_flows: int = MIN_FLOWS_PER_IP):
         """
         Args:
-            window_seconds : durée de chaque fenêtre temporelle (secondes)
-            n_components   : nb de composantes PCA pour modéliser le trafic normal
-            threshold      : seuil du score d'anomalie au-dessus duquel on détecte
-            min_flows      : nb minimum de flows par IP pour calculer l'entropie
+            window_seconds   : durée de chaque fenêtre temporelle (secondes)
+            n_components     : nb de composantes PCA pour le subspace major
+            threshold_major  : seuil pour le subspace major
+            threshold_minor  : seuil pour le subspace minor
+            min_flows        : nb minimum de flows par IP pour calculer l'entropie
         """
         self.window_seconds = window_seconds
         self.n_components   = n_components
-        self.threshold      = threshold
+        self.threshold_major = threshold_major
+        self.threshold_minor = threshold_minor
         self.min_flows      = min_flows
 
         # Objets entraînés (remplis lors du fit)
         self.scaler_        = StandardScaler()
-        self.pca_           = PCA(n_components=n_components)
+        self.pca_           = PCA() # On garde toutes les composantes initialement
         self.is_fitted_     = False
 
-        # Statistiques pour normaliser le score résiduel dans [0, 1]
-        self._residual_mean = None
-        self._residual_std  = None
-        self._residual_max  = None
+        # Statistiques pour normaliser le score dans [0, 1]
+        self._score_mean = None
+        self._score_std  = None
+        self._score_max  = None
 
     # ── Étape 1 : Entraînement ─────────────────────────────────────────────
 
     def fit(self, df_train: pd.DataFrame) -> 'LakhinaEntropyDetector':
         """
         Entraîne le modèle PCA sur le trafic de training.
-        
-        Le modèle apprend la structure "normale" du trafic réseau.
-        Il sera ensuite utilisé pour mesurer les déviations (anomalies).
-        
-        Args:
-            df_train : DataFrame d'entraînement (doit contenir les colonnes
-                    StartTime, SrcAddr, DstAddr, Sport, Dport)
-        
-        Returns:
-            self (pour le chaînage)
         """
         print("[FIT] Démarrage de l'entraînement Lakhina Entropy...")
 
-        # CORRECTION : entraîner uniquement sur le trafic non-botnet
-        # Le PCA doit apprendre ce qu'est le trafic NORMAL/BACKGROUND
         if 'Label' in df_train.columns:
             df_fit = df_train[df_train['Label'] != 'Botnet'].copy()
-            print(f"[FIT] Entraînement sur trafic non-botnet uniquement : "
-                f"{len(df_fit):,} flows "
-                f"(exclu {len(df_train)-len(df_fit):,} flows Botnet)")
+            print(f"[FIT] Entraînement sur trafic non-botnet uniquement : {len(df_fit):,} flows")
         else:
             df_fit = df_train.copy()
 
         # 1. Agréger par fenêtres temporelles et IP source
         feature_matrix = self._build_feature_matrix(df_fit, label="FIT")
 
-        if len(feature_matrix) < self.n_components + 1:
-            raise ValueError(
-                f"Pas assez de données pour entraîner le PCA "
-                f"({len(feature_matrix)} vecteurs, besoin d'au moins "
-                f"{self.n_components + 1})"
-            )
+        if len(feature_matrix) < 5:
+            raise ValueError(f"Pas assez de données pour entraîner le PCA ({len(feature_matrix)} vecteurs)")
 
-        # 2. Normalisation (centrage-réduction)
+        # 2. Normalisation
         X_scaled = self.scaler_.fit_transform(feature_matrix)
 
-        # 3. PCA : les n_components premières composantes modélisent
-        #    le trafic "normal" (variance principale)
+        # 3. PCA complet
         self.pca_.fit(X_scaled)
 
-        # 4. Calculer les résidus sur les données d'entraînement
-        #    pour établir les statistiques de normalisation
-        residuals = self._compute_residuals(X_scaled)
-        self._residual_mean = np.mean(residuals)
-        self._residual_std  = np.std(residuals) + 1e-10
-        self._residual_max  = np.percentile(residuals, 99)
+        # 4. Calculer les scores de subspace sur le train set pour calibration
+        s_major, s_minor = self._compute_subspace_scores(X_scaled)
+        self._major_max = np.percentile(s_major, 99)
+        self._minor_max = np.percentile(s_minor, 99)
 
         self.is_fitted_ = True
 
         # Afficher la variance expliquée
-        var_explained = np.sum(self.pca_.explained_variance_ratio_) * 100
-        print(f"[FIT] PCA entraîné sur {len(feature_matrix)} vecteurs d'entropie")
-        print(f"[FIT] Variance expliquée par {self.n_components} composantes : "
-            f"{var_explained:.1f}%")
-        print(f"[FIT] Résidu moyen (train) : {self._residual_mean:.4f} "
-            f"± {self._residual_std:.4f}")
-        print("[FIT] Entraînement terminé ✓")
-
+        var_explained = np.sum(self.pca_.explained_variance_ratio_[:self.n_components]) * 100
+        print(f"[FIT] PCA entraîné. Variance expliquée par les {self.n_components} composantes normales : {var_explained:.1f}%")
+        
         return self
 
     # ── Étape 2 : Prédiction ───────────────────────────────────────────────
@@ -161,128 +138,80 @@ class LakhinaEntropyDetector:
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Calcule un score d'anomalie pour chaque fenêtre temporelle / IP source.
-        
-        Args:
-            df : DataFrame à analyser (même format que df_train)
-        
-        Returns:
-            DataFrame avec les colonnes :
-              - time_window  : identifiant de la fenêtre temporelle
-              - src_ip       : IP source analysée
-              - H_dst_ip     : entropie des IP destinations
-              - H_dst_port   : entropie des ports destinations
-              - H_src_port   : entropie des ports sources
-              - residual     : norme du vecteur résiduel brut
-              - anomaly_score: score normalisé dans [0, 1]
-              - is_anomaly   : True si score > threshold
-              - true_label   : label ground-truth (si disponible)
         """
         if not self.is_fitted_:
             raise RuntimeError("Le modèle n'est pas entraîné. Appelez fit() d'abord.")
 
-        print("[PREDICT] Calcul des scores d'anomalie...")
-
         # 1. Construire la matrice de features
-        feature_matrix, metadata = self._build_feature_matrix(
-            df, label="PREDICT", return_metadata=True
-        )
+        feature_matrix, metadata = self._build_feature_matrix(df, label="PREDICT", return_metadata=True)
 
         if len(feature_matrix) == 0:
-            print("[WARN] Aucun vecteur d'entropie calculable sur ces données.")
             return pd.DataFrame()
 
-        # 2. Normaliser avec le scaler entraîné (pas de re-fit !)
+        # 2. Normaliser
         X_scaled = self.scaler_.transform(feature_matrix)
 
-        # 3. Calculer les résidus PCA
-        residuals = self._compute_residuals(X_scaled)
+        # 3. Calculer les scores de subspace
+        s_major, s_minor = self._compute_subspace_scores(X_scaled)
 
-        # 4. Normaliser le score dans [0, 1]
-        anomaly_scores = self._normalize_scores(residuals)
-
-        # 5. Assembler les résultats
+        # 4. Assembler les résultats
         results = metadata.copy()
-        results['H_dst_ip']      = feature_matrix[:, 0]
+        results['H_src_port']    = feature_matrix[:, 0]
         results['H_dst_port']    = feature_matrix[:, 1]
-        results['H_src_port']    = feature_matrix[:, 2]
-        results['residual']      = residuals
-        results['anomaly_score'] = anomaly_scores
-        results['is_anomaly']    = anomaly_scores > self.threshold
-
-        print(f"[PREDICT] {len(results)} vecteurs analysés")
-        print(f"[PREDICT] Anomalies détectées : "
-              f"{results['is_anomaly'].sum()} "
-              f"({results['is_anomaly'].mean()*100:.1f}%)")
+        results['H_dst_ip']      = feature_matrix[:, 2]
+        results['H_flags']       = feature_matrix[:, 3]
+        results['S_major']       = s_major
+        results['S_minor']       = s_minor
+        results['is_anomaly']    = (s_major > self.threshold_major) | (s_minor > self.threshold_minor)
 
         return results
 
     # ── Étape 3 : Calibration du seuil ────────────────────────────────────
 
-    def calibrate_threshold(self,
+    def calibrate_thresholds(self,
                              df_val: pd.DataFrame,
                              metric: str = 'f1',
-                             n_thresholds: int = 100) -> float:
+                             n_steps: int = 20) -> tuple:
         """
-        Cherche le seuil optimal sur le dataset de validation.
-        
-        Args:
-            df_val       : DataFrame de validation avec labels
-            metric       : métrique à optimiser ('f1', 'precision', 'recall')
-            n_thresholds : nombre de seuils à tester
-        
-        Returns:
-            Le seuil optimal trouvé
+        Cherche les seuils optimaux pour Major et Minor sur le dataset de validation.
         """
-        print(f"[CALIBRATE] Recherche du seuil optimal (métrique : {metric})...")
+        print(f"[CALIBRATE] Recherche des seuils optimaux (métrique : {metric})...")
 
         results = self.predict(df_val)
         if results.empty or 'true_label' not in results.columns:
-            print("[WARN] Impossible de calibrer : labels manquants.")
-            return self.threshold
+            return self.threshold_major, self.threshold_minor
 
-        # Labels binaires : 1 = Botnet, 0 = Non-botnet
         y_true = (results['true_label'] == 'Botnet').astype(int)
-        scores = results['anomaly_score'].values
+        s_major = results['S_major'].values
+        s_minor = results['S_minor'].values
 
-        best_threshold = self.threshold
-        best_score     = 0.0
+        best_score = -1.0
+        best_tm = self.threshold_major
+        best_tn = self.threshold_minor
 
-        thresholds = np.linspace(scores.min(), scores.max(), n_thresholds)
+        t_major_list = np.linspace(0, np.percentile(s_major, 98), n_steps)
+        t_minor_list = np.linspace(0, np.percentile(s_minor, 98), n_steps)
 
-        records = []
-        for t in thresholds:
-            y_pred = (scores > t).astype(int)
-            tp = np.sum((y_pred == 1) & (y_true == 1))
-            fp = np.sum((y_pred == 1) & (y_true == 0))
-            fn = np.sum((y_pred == 0) & (y_true == 1))
-            tn = np.sum((y_pred == 0) & (y_true == 0))
+        for tm in t_major_list:
+            for tn in t_minor_list:
+                y_pred = ((s_major > tm) | (s_minor > tn)).astype(int)
+                tp = np.sum((y_pred == 1) & (y_true == 1))
+                fp = np.sum((y_pred == 1) & (y_true == 0))
+                fn = np.sum((y_pred == 0) & (y_true == 1))
+                
+                precision = tp / (tp + fp + 1e-10)
+                recall    = tp / (tp + fn + 1e-10)
+                f1        = 2 * precision * recall / (precision + recall + 1e-10)
+                
+                current = f1 if metric == 'f1' else (precision if metric == 'precision' else recall)
+                if current > best_score:
+                    best_score = current
+                    best_tm, best_tn = tm, tn
 
-            precision = tp / (tp + fp + 1e-10)
-            recall    = tp / (tp + fn + 1e-10)
-            f1        = 2 * precision * recall / (precision + recall + 1e-10)
-            fpr       = fp / (fp + tn + 1e-10)
-
-            records.append({
-                'threshold': t,
-                'precision': precision,
-                'recall': recall,
-                'f1': f1,
-                'fpr': fpr,
-                'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn
-            })
-
-            current = {'f1': f1, 'precision': precision, 'recall': recall}[metric]
-            if current > best_score:
-                best_score     = current
-                best_threshold = t
-
-        self.threshold         = best_threshold
-        self._calibration_data = pd.DataFrame(records)
-
-        print(f"[CALIBRATE] Seuil optimal trouvé : {best_threshold:.4f} "
-              f"({metric} = {best_score:.4f})")
-
-        return best_threshold
+        self.threshold_major = best_tm
+        self.threshold_minor = best_tn
+        print(f"[CALIBRATE] Seuils trouvés : Major={best_tm:.2f}, Minor={best_tn:.2f} (F1={best_score:.4f})")
+        return best_tm, best_tn
 
     # ── Méthodes internes ──────────────────────────────────────────────────
 
@@ -291,60 +220,36 @@ class LakhinaEntropyDetector:
                                label: str = "",
                                return_metadata: bool = False):
         """
-        Construit la matrice de features d'entropie.
-        
-        Pour chaque fenêtre temporelle et chaque IP source :
-          → calcule [H_dst_ip, H_dst_port, H_src_port]
-        
-        C'est le cœur de la méthode Lakhina Entropy.
+        Construit la matrice de features d'entropie [H_SrcPort, H_DstPort, H_DstAddr, H_Flags].
         """
         df = df.copy()
         df = df.sort_values('StartTime')
 
-        # Créer un identifiant de fenêtre temporelle
-        # (numéro entier = nb de fenêtres écoulées depuis le début)
         t0 = df['StartTime'].min()
-        df['_tw'] = (
-            (df['StartTime'] - t0).dt.total_seconds()
-            // self.window_seconds
-        ).astype(int)
+        df['_tw'] = ((df['StartTime'] - t0).dt.total_seconds() // self.window_seconds).astype(int)
 
         feature_vectors = []
         metadata_rows   = []
 
-        total_windows = df['_tw'].nunique()
-        print(f"[{label}] Calcul des entropies sur "
-              f"{total_windows} fenêtres temporelles...")
-
         for tw, group_tw in df.groupby('_tw'):
-
-            # Timestamp représentatif de cette fenêtre
             time_val = group_tw['StartTime'].iloc[0]
-
-            # Regrouper par IP source dans cette fenêtre
             for src_ip, group_ip in group_tw.groupby('SrcAddr'):
-
                 if len(group_ip) < self.min_flows:
                     continue
 
-                # ── Calcul des 3 entropies ──
-
-                h_dst_ip   = self._entropy(group_ip['DstAddr'])
-                h_dst_port = self._entropy(group_ip['Dport'].dropna())
                 h_src_port = self._entropy(group_ip['Sport'].dropna())
+                h_dst_port = self._entropy(group_ip['Dport'].dropna())
+                h_dst_ip   = self._entropy(group_ip['DstAddr'])
+                
+                # Extraction des flags depuis 'State'
+                flags = group_ip['State'].fillna('').astype(str).str.replace('_', '', regex=False)
+                h_flags    = self._entropy(flags)
 
-                feature_vectors.append([h_dst_ip, h_dst_port, h_src_port])
+                feature_vectors.append([h_src_port, h_dst_port, h_dst_ip, h_flags])
 
-                # Déterminer le label ground-truth de cette IP dans cette fenêtre
                 if 'Label' in group_ip.columns:
-                    # Si l'IP a au moins un flow Botnet → label = Botnet
-                    labels_in_group = group_ip['Label'].values
-                    if 'Botnet' in labels_in_group:
-                        true_label = 'Botnet'
-                    elif 'Normal' in labels_in_group:
-                        true_label = 'Normal'
-                    else:
-                        true_label = 'Background'
+                    labels = group_ip['Label'].values
+                    true_label = 'Botnet' if 'Botnet' in labels else ('Normal' if 'Normal' in labels else 'Background')
                 else:
                     true_label = None
 
@@ -356,73 +261,35 @@ class LakhinaEntropyDetector:
                     'true_label':  true_label,
                 })
 
-        if len(feature_vectors) == 0:
-            if return_metadata:
-                return np.array([]), pd.DataFrame()
-            return np.array([])
-
-        X = np.array(feature_vectors, dtype=np.float64)
-
-        # Remplacer les NaN éventuels par 0
+        X = np.array(feature_vectors, dtype=np.float64) if feature_vectors else np.empty((0, 4))
         X = np.nan_to_num(X, nan=0.0)
 
         if return_metadata:
             return X, pd.DataFrame(metadata_rows)
         return X
 
-    def _compute_residuals(self, X_scaled: np.ndarray) -> np.ndarray:
+    def _compute_subspace_scores(self, X_scaled: np.ndarray) -> tuple:
         """
-        Calcule la norme du vecteur résiduel pour chaque observation.
+        Calcule les scores d'anomalie basés sur la projection dans les subspaces Major et Minor.
+        S = Σ (P_i^2 / λ_i) 
+        """
+        X_pca = self.pca_.transform(X_scaled)
+        variances = self.pca_.explained_variance_ + 1e-10
         
-        Principe PCA Lakhina :
-          - Projeter X dans l'espace PCA (composantes principales)
-          - Reconstruire X depuis les n_components composantes normales
-          - Le résidu = X - X_reconstruit = la partie "anormale"
-          - Score = norme L2 du résidu
-        """
-        # Projection et reconstruction
-        X_projected    = self.pca_.transform(X_scaled)
-        X_reconstructed = self.pca_.inverse_transform(X_projected)
-
-        # Résidu = différence entre le vrai signal et sa reconstruction
-        residuals = X_scaled - X_reconstructed
-
-        # Score = norme L2 du vecteur résiduel
-        scores = np.linalg.norm(residuals, axis=1)
-
-        return scores
-
-    def _normalize_scores(self, residuals: np.ndarray) -> np.ndarray:
-        """
-        Normalise les scores résiduels dans [0, 1].
+        # Subspace Major (k premières composantes)
+        major_idx = range(self.n_components)
+        # Subspace Minor (restantes)
+        minor_idx = range(self.n_components, len(variances))
         
-        Score proche de 0 = comportement normal.
-        Score proche de 1 = forte anomalie.
+        s_major = np.sum((X_pca[:, major_idx]**2) / variances[major_idx], axis=1)
+        s_minor = np.sum((X_pca[:, minor_idx]**2) / variances[minor_idx], axis=1)
         
-        CORRECTION : on inverse le score car le Botnet a des résidus
-        FAIBLES (comportement répétitif, bien modélisé par le PCA)
-        et le Background a des résidus ÉLEVÉS (comportement varié).
-        L'inversion fait que Botnet → score élevé → détection correcte.
-        """
-        scores = residuals / (self._residual_max + 1e-10)
-        scores = np.clip(scores, 0.0, 1.0)
+        return s_major, s_minor
 
-        # Inversion du score
-        scores = 1.0 - scores
-
-        return scores
 
     @staticmethod
     def _entropy(series: pd.Series) -> float:
-        """
-        Calcule l'entropie de Shannon normalisée d'une série.
-        
-        H = -Σ p(x) * log2(p(x))
-        
-        Normalisée par log2(n) pour avoir un résultat dans [0, 1] :
-          - H = 0 : toujours la même valeur (très répétitif → suspect botnet)
-          - H = 1 : distribution parfaitement uniforme (diversifié → normal)
-        """
+        """Calcule l'entropie de Shannon."""
         if len(series) == 0:
             return 0.0
 
@@ -431,10 +298,4 @@ class LakhinaEntropyDetector:
         probs = value_counts.values
 
         # Entropie de Shannon
-        entropy = -np.sum(probs * np.log2(probs + 1e-10))
-
-        # Normalisation par l'entropie maximale possible
-        n_unique = len(value_counts)
-        max_entropy = np.log2(n_unique) if n_unique > 1 else 1.0
-
-        return entropy / max_entropy if max_entropy > 0 else 0.0
+        return -np.sum(probs * np.log2(probs + 1e-12))

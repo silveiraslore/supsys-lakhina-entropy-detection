@@ -140,6 +140,53 @@ def split_dataset(df: pd.DataFrame,
     return df_train, df_val, df_test
 
 
+class CTU13Loader:
+    """
+    CTU-13 Dataset Loader and Preprocessor.
+    Useful for loading batches of .binetflow files and splitting them for training.
+    """
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self.raw_data = None
+
+    def load_all(self, max_files: int = 5) -> pd.DataFrame:
+        """
+        Loads and cleans a subset of the CTU-13 dataset.
+        """
+        all_dfs = []
+        # Support both 'CTU-13-Dataset' and direct subdirectories
+        base_path = self.data_dir / "CTU-13-Dataset" if (self.data_dir / "CTU-13-Dataset").exists() else self.data_dir
+        
+        # Find all .binetflow files
+        files = list(base_path.glob("**/*.binetflow"))
+        if not files:
+            print(f"[WARNING] No .binetflow files found in {base_path}")
+            return pd.DataFrame()
+
+        print(f"[INFO] Found {len(files)} files. Loading {min(max_files, len(files))}...")
+        
+        for f in files[:max_files]:
+            df = load_binetflow(str(f))
+            df = clean_dataframe(df)
+            all_dfs.append(df)
+            
+        if not all_dfs:
+            return pd.DataFrame()
+            
+        self.raw_data = pd.concat(all_dfs, ignore_index=True)
+        print(f"[SUCCESS] Total data loaded: {len(self.raw_data):,} flows")
+        return self.raw_data
+
+    def split_data(self, df: pd.DataFrame = None, **kwargs) -> tuple:
+        """
+        Wrapper around split_dataset function.
+        """
+        target_df = df if df is not None else self.raw_data
+        if target_df is None:
+            raise ValueError("No data to split. Call load_all() first or provide a DataFrame.")
+        return split_dataset(target_df, **kwargs)
+
+
 # ── Utility Functions (Private) ─────────────────────────────────────────────
 
 def _parse_port(val) -> float:
@@ -155,10 +202,11 @@ def _parse_port(val) -> float:
 
 def _normalize_label(label: str) -> str:
     """Normalizes CTU-13 labels into 3 classes: Botnet / Normal / Background."""
-    if 'Botnet' in label or 'botnet' in label:
+    label = str(label).lower()
+    if 'botnet' in label:
         return 'Botnet'
     for key, val in LABEL_MAP.items():
-        if key in label:
+        if key.lower().split('=')[-1] in label:
             return val
     return 'Unknown'
 
@@ -167,17 +215,14 @@ def _print_split_info(name: str, df: pd.DataFrame):
     """Prints statistics for a split."""
     counts = df['Label'].value_counts()
     total  = len(df)
+    if total == 0:
+        print(f"  {name:12s}: 0 flows")
+        return
+        
     print(f"  {name:12s}: {total:>8,} flows | "
           f"Botnet: {counts.get('Botnet', 0):>7,} "
           f"({counts.get('Botnet', 0)/total*100:4.1f}%) | "
           f"Normal: {counts.get('Normal', 0):>7,} "
           f"({counts.get('Normal', 0)/total*100:4.1f}%) | "
           f"Background: {counts.get('Background', 0):>7,} "
-          f"({counts.get('Background', 0)/total*100:4.1f}%)")
-  {name:12s}: {total:>8,} flows | "
-          f"Botnet: {counts.get('Botnet', 0):>7,} "
-          f"({counts.get('Botnet', 0)/total*100:4.1f}%) | "
-          f"Normal: {counts.get('Normal', 0):>7,} "
-          f"({counts.get('Normal', 0)/total*100:4.1f}%) | "
-          f"Background: {counts.get('Background', 0):>7,} "
-          f"({counts.get('Background', 0)/total*100:4.1f}%)")
+          f"({counts.get('Background', 0)/total*100:4.1f}%)")
