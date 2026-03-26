@@ -1,8 +1,15 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 0fc16ca58e407e3d02be2d274ab4c01d595e7430
 venv/
 __pycache__/
 *.pyc
 data/
+<<<<<<< HEAD
 =======
 dataset/9/*
 >>>>>>> ed191f3b9e3698d42d73be6bb4ed242e2a61a51e
+=======
+dataset/
+>>>>>>> 0fc16ca58e407e3d02be2d274ab4c01d595e7430

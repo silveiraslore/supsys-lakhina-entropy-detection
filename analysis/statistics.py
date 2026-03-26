@@ -189,9 +189,10 @@ def compute_entropy_preview(df: pd.DataFrame,
     print("[INFO] Computing entropy preview (may take a few seconds)...")
     
     df_sorted = df.sort_values('StartTime').copy()
+    t0 = df_sorted['StartTime'].min()
     df_sorted['TimeWindow'] = (
-        df_sorted['StartTime'].astype(np.int64) // (window_seconds * 10**9)
-    )
+        (df_sorted['StartTime'] - t0).dt.total_seconds() // window_seconds
+    ).astype(int)
     
     entropies = []
     

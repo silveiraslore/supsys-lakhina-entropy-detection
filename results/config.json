@@ -6,7 +6,7 @@
   "n_components": 2,
   "min_flows": 5,
   "threshold_init": 0.5,
-  "train_ratio": 0.6,
-  "val_ratio": 0.2,
-  "threshold_final": 0.07037334576021767
+  "train_ratio": 0.7,
+  "val_ratio": 0.15,
+  "threshold_final": 0.6775810595614202
 }

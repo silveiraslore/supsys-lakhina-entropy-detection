@@ -102,15 +102,25 @@ class LakhinaEntropyDetector:
         
         Args:
             df_train : DataFrame d'entraînement (doit contenir les colonnes
-                       StartTime, SrcAddr, DstAddr, Sport, Dport)
+                    StartTime, SrcAddr, DstAddr, Sport, Dport)
         
         Returns:
             self (pour le chaînage)
         """
         print("[FIT] Démarrage de l'entraînement Lakhina Entropy...")
 
+        # CORRECTION : entraîner uniquement sur le trafic non-botnet
+        # Le PCA doit apprendre ce qu'est le trafic NORMAL/BACKGROUND
+        if 'Label' in df_train.columns:
+            df_fit = df_train[df_train['Label'] != 'Botnet'].copy()
+            print(f"[FIT] Entraînement sur trafic non-botnet uniquement : "
+                f"{len(df_fit):,} flows "
+                f"(exclu {len(df_train)-len(df_fit):,} flows Botnet)")
+        else:
+            df_fit = df_train.copy()
+
         # 1. Agréger par fenêtres temporelles et IP source
-        feature_matrix = self._build_feature_matrix(df_train, label="FIT")
+        feature_matrix = self._build_feature_matrix(df_fit, label="FIT")
 
         if len(feature_matrix) < self.n_components + 1:
             raise ValueError(
@@ -131,7 +141,7 @@ class LakhinaEntropyDetector:
         residuals = self._compute_residuals(X_scaled)
         self._residual_mean = np.mean(residuals)
         self._residual_std  = np.std(residuals) + 1e-10
-        self._residual_max  = np.percentile(residuals, 99)  # robuste aux outliers
+        self._residual_max  = np.percentile(residuals, 99)
 
         self.is_fitted_ = True
 
@@ -139,9 +149,9 @@ class LakhinaEntropyDetector:
         var_explained = np.sum(self.pca_.explained_variance_ratio_) * 100
         print(f"[FIT] PCA entraîné sur {len(feature_matrix)} vecteurs d'entropie")
         print(f"[FIT] Variance expliquée par {self.n_components} composantes : "
-              f"{var_explained:.1f}%")
+            f"{var_explained:.1f}%")
         print(f"[FIT] Résidu moyen (train) : {self._residual_mean:.4f} "
-              f"± {self._residual_std:.4f}")
+            f"± {self._residual_std:.4f}")
         print("[FIT] Entraînement terminé ✓")
 
         return self
@@ -386,16 +396,19 @@ class LakhinaEntropyDetector:
         """
         Normalise les scores résiduels dans [0, 1].
         
-        Utilise les statistiques calculées sur le training set.
-        Un score proche de 0 = comportement normal.
-        Un score proche de 1 = forte anomalie.
+        Score proche de 0 = comportement normal.
+        Score proche de 1 = forte anomalie.
+        
+        CORRECTION : on inverse le score car le Botnet a des résidus
+        FAIBLES (comportement répétitif, bien modélisé par le PCA)
+        et le Background a des résidus ÉLEVÉS (comportement varié).
+        L'inversion fait que Botnet → score élevé → détection correcte.
         """
-        # Normalisation par le 99e percentile du training
-        # (robuste aux outliers extrêmes)
         scores = residuals / (self._residual_max + 1e-10)
-
-        # Clipper dans [0, 1]
         scores = np.clip(scores, 0.0, 1.0)
+
+        # Inversion du score
+        scores = 1.0 - scores
 
         return scores
 

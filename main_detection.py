@@ -41,8 +41,8 @@ CONFIG = {
     'threshold_init': 0.5,
 
     # Splits (si les fichiers parquet n'existent pas, on recharge depuis le CSV)
-    'train_ratio': 0.60,
-    'val_ratio':   0.20,
+    'train_ratio': 0.70,
+    'val_ratio':   0.15,
     # → test_ratio = 0.20 implicitement
 }
 

@@ -76,9 +76,15 @@ class DetectionEvaluator:
 
         # Filtrer le Background pour l'évaluation binaire
         # (comme dans l'article : on évalue uniquement Botnet vs Normal)
-        self._df_eval = results[
-            results['true_label'].isin(['Botnet', 'Normal'])
-        ].copy()
+        # APRÈS — on inclut Background comme "Non-Botnet"
+        self._df_eval = results.copy()
+        self._df_eval['true_label_binary'] = self._df_eval['true_label'].apply(
+            lambda x: 'Botnet' if x == 'Botnet' else 'Normal'
+        )
+        self._df_eval['true_label'] = self._df_eval['true_label_binary']
+        self._df_eval = self._df_eval[
+            self._df_eval['true_label'].isin(['Botnet', 'Normal'])
+        ]
 
         if len(self._df_eval) == 0:
             raise ValueError(
