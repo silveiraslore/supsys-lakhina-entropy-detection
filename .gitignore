@@ -1,9 +1,22 @@
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 0fc16ca58e407e3d02be2d274ab4c01d595e7430
 venv/
 __pycache__/
 *.pyc
 .mpl-cache/
 data/
+<<<<<<< HEAD
+=======
+dataset/9/*
+>>>>>>> ed191f3b9e3698d42d73be6bb4ed242e2a61a51e
+=======
 dataset/
+<<<<<<< HEAD
 .DS_Store
 .DS_Store/
 .mpl-cache
+=======
+>>>>>>> 0fc16ca58e407e3d02be2d274ab4c01d595e7430
+>>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3

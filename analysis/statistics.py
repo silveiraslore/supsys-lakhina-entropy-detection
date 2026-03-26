@@ -1,6 +1,6 @@
 """
-Module d'analyse statistique et visualisation du dataset CTU-13.
-Responsable : Membre 2
+CTU-13 Dataset Statistical Analysis and Visualization Module.
+Responsible: Member 2
 """
 
 import os
@@ -18,7 +18,7 @@ import matplotlib.dates as mdates
 import seaborn as sns
 
 
-# ── Style global ─────────────────────────────────────────────────────────────
+# ── Global Style ─────────────────────────────────────────────────────────────
 plt.rcParams.update({
     'figure.dpi': 120,
     'axes.grid': True,
@@ -34,36 +34,36 @@ COLORS = {
 }
 
 
-# ── Analyse globale ──────────────────────────────────────────────────────────
+# ── Global Analysis ──────────────────────────────────────────────────────────
 
 def print_summary(df: pd.DataFrame):
-    """Affiche un résumé complet du dataset."""
+    """Prints a complete summary of the dataset."""
     print("=" * 60)
-    print("RÉSUMÉ DU DATASET")
+    print("DATASET SUMMARY")
     print("=" * 60)
     
-    print(f"\n{'Nombre total de flows':30s}: {len(df):,}")
-    print(f"{'Période':30s}: {df['StartTime'].min()} → {df['StartTime'].max()}")
-    print(f"{'Durée capturée':30s}: {df['StartTime'].max() - df['StartTime'].min()}")
+    print(f"\n{'Total flows':30s}: {len(df):,}")
+    print(f"{'Period':30s}: {df['StartTime'].min()} → {df['StartTime'].max()}")
+    print(f"{'Captured duration':30s}: {df['StartTime'].max() - df['StartTime'].min()}")
     
-    print("\n── Distribution des labels ──")
+    print("\n── Label Distribution ──")
     label_counts = df['Label'].value_counts()
     for label, count in label_counts.items():
         bar = '█' * int(count / len(df) * 40)
         print(f"  {label:12s}: {count:>8,} ({count/len(df)*100:5.2f}%)  {bar}")
     
-    print("\n── Protocoles ──")
+    print("\n── Protocols ──")
     proto_counts = df['Proto'].value_counts().head(10)
     for proto, count in proto_counts.items():
         print(f"  {str(proto):8s}: {count:>8,} ({count/len(df)*100:5.2f}%)")
     
-    print("\n── Statistiques numériques ──")
+    print("\n── Numerical Statistics ──")
     numeric_cols = ['Dur', 'TotPkts', 'TotBytes', 'SrcBytes']
     print(df[numeric_cols].describe().to_string())
 
 
 def plot_label_distribution(df: pd.DataFrame, save_dir: str = 'results/'):
-    """Pie chart + bar chart de la distribution des labels."""
+    """Pie chart + bar chart of label distribution."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
     counts = df['Label'].value_counts()
@@ -80,13 +80,13 @@ def plot_label_distribution(df: pd.DataFrame, save_dir: str = 'results/'):
     )
     for at in autotexts:
         at.set_fontsize(9)
-    axes[0].set_title('Distribution des labels (% global)')
+    axes[0].set_title('Label Distribution (% global)')
     
-    # Bar chart en log scale (utile car Background >> Botnet)
+    # Bar chart in log scale (useful as Background >> Botnet)
     axes[1].bar(counts.index, counts.values, color=colors, edgecolor='black', linewidth=0.5)
     axes[1].set_yscale('log')
-    axes[1].set_ylabel('Nombre de flows (échelle log)')
-    axes[1].set_title('Distribution des labels (échelle logarithmique)')
+    axes[1].set_ylabel('Number of flows (log scale)')
+    axes[1].set_title('Label Distribution (logarithmic scale)')
     for i, (label, count) in enumerate(counts.items()):
         axes[1].text(i, count * 1.1, f'{count:,}', ha='center', fontsize=9)
     
@@ -99,8 +99,8 @@ def plot_traffic_over_time(df: pd.DataFrame,
                            window: str = '5min',
                            save_dir: str = 'results/'):
     """
-    Visualise l'évolution temporelle du trafic par label.
-    Très utile pour comprendre quand le botnet est actif.
+    Visualizes the temporal evolution of traffic by label.
+    Very useful to understand when the botnet is active.
     """
     df_time = df.set_index('StartTime')
     
@@ -109,21 +109,21 @@ def plot_traffic_over_time(df: pd.DataFrame,
     for ax, label in zip(axes, ['Botnet', 'Normal', 'Background']):
         subset = df_time[df_time['Label'] == label]
         if len(subset) == 0:
-            ax.set_title(f'{label} — aucune donnée')
+            ax.set_title(f'{label} — no data')
             continue
         
-        # Comptage par fenêtre temporelle
+        # Counting by time window
         counts = subset['Label'].resample(window).count()
         ax.fill_between(counts.index, counts.values,
                         alpha=0.6, color=COLORS[label])
         ax.plot(counts.index, counts.values,
                 color=COLORS[label], linewidth=0.8)
         ax.set_ylabel(f'Flows / {window}')
-        ax.set_title(f'Trafic {label} dans le temps')
+        ax.set_title(f'{label} Traffic Over Time')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     
-    axes[-1].set_xlabel('Heure')
-    plt.suptitle('Évolution temporelle du trafic réseau', fontsize=12, y=1.01)
+    axes[-1].set_xlabel('Time')
+    plt.suptitle('Temporal Evolution of Network Traffic', fontsize=12, y=1.01)
     plt.tight_layout()
     _save_fig(fig, save_dir, 'traffic_over_time.png')
     _maybe_show()
@@ -131,8 +131,13 @@ def plot_traffic_over_time(df: pd.DataFrame,
 
 def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
     """
+<<<<<<< HEAD
     Compare la distribution des features numériques entre Botnet et Non-Botnet.
     Aide à comprendre ce que Lakhina Entropy va mesurer.
+=======
+    Compares the distribution of numerical features between Botnet and Normal.
+    Helps to understand what Lakhina Entropy will measure.
+>>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
     """
     features = ['Dur', 'TotPkts', 'TotBytes', 'SrcBytes']
     
@@ -140,12 +145,18 @@ def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
     axes = axes.flatten()
     
     for ax, feat in zip(axes, features):
+<<<<<<< HEAD
         subsets = {
             'Botnet': df[df['Label'] == 'Botnet'][feat].dropna(),
             'Non-Botnet': df[df['Label'] != 'Botnet'][feat].dropna(),
         }
         for label, subset in subsets.items():
             # Clip les valeurs extrêmes pour la lisibilité
+=======
+        for label in labels_to_compare:
+            subset = df[df['Label'] == label][feat].dropna()
+            # Clip extreme values for readability
+>>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
             p99 = subset.quantile(0.99)
             subset_clipped = subset[subset <= p99]
             
@@ -154,35 +165,39 @@ def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
                     density=True, edgecolor='none')
         
         ax.set_xlabel(feat)
-        ax.set_ylabel('Densité')
-        ax.set_title(f'Distribution de {feat}')
+        ax.set_ylabel('Density')
+        ax.set_title(f'Distribution of {feat}')
         ax.legend()
         ax.set_yscale('log')
     
+<<<<<<< HEAD
     plt.suptitle('Distributions des features : Botnet vs Non-Botnet', fontsize=12)
+=======
+    plt.suptitle('Feature Distributions: Botnet vs Normal', fontsize=12)
+>>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
     plt.tight_layout()
     _save_fig(fig, save_dir, 'feature_distributions.png')
     _maybe_show()
 
 
 def plot_protocol_by_label(df: pd.DataFrame, save_dir: str = 'results/'):
-    """Heatmap des protocoles par label — révèle le comportement botnet."""
+    """Heatmap of protocols by label — reveals botnet behavior."""
     pivot = pd.crosstab(
         df['Proto'],
         df['Label'],
-        normalize='index'  # % par protocole
+        normalize='index'  # % per protocol
     )
     
-    # Garder seulement les protocoles les plus fréquents
+    # Keep only most frequent protocols
     top_protos = df['Proto'].value_counts().head(10).index
     pivot = pivot.loc[pivot.index.isin(top_protos)]
     
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.heatmap(pivot, annot=True, fmt='.2%', cmap='YlOrRd',
                 ax=ax, linewidths=0.5, cbar_kws={'label': 'Proportion'})
-    ax.set_title('Proportion des labels par protocole')
+    ax.set_title('Label Proportion by Protocol')
     ax.set_xlabel('Label')
-    ax.set_ylabel('Protocole')
+    ax.set_ylabel('Protocol')
     
     plt.tight_layout()
     _save_fig(fig, save_dir, 'protocol_by_label.png')
@@ -193,10 +208,10 @@ def compute_entropy_preview(df: pd.DataFrame,
                              window_seconds: int = 60,
                              save_dir: str = 'results/'):
     """
-    Calcule et visualise un aperçu de l'entropie du trafic dans le temps.
-    Donne une intuition de ce que Lakhina Entropy va détecter.
+    Calculates and visualizes a preview of traffic entropy over time.
+    Provides intuition of what Lakhina Entropy will detect.
     """
-    print("[INFO] Calcul de l'aperçu d'entropie (peut prendre quelques secondes)...")
+    print("[INFO] Computing entropy preview (may take a few seconds)...")
     
     df_sorted = df.sort_values('StartTime').copy()
     t0 = df_sorted['StartTime'].min()
@@ -210,6 +225,7 @@ def compute_entropy_preview(df: pd.DataFrame,
         if len(group) < 10:
             continue
         
+<<<<<<< HEAD
         # Entropie des IP destinations
         h_dst = _normalized_entropy(group['DstAddr'])
         
@@ -218,8 +234,21 @@ def compute_entropy_preview(df: pd.DataFrame,
         
         # Entropie des ports sources
         h_sport = _normalized_entropy(group['Sport'].dropna())
+=======
+        # Destination IP Entropy
+        dst_counts = group['DstAddr'].value_counts(normalize=True)
+        h_dst = -np.sum(dst_counts * np.log2(dst_counts + 1e-10))
         
-        # Label dominant dans cette fenêtre
+        # Destination Port Entropy
+        dst_port_counts = group['Dport'].dropna().value_counts(normalize=True)
+        h_dport = -np.sum(dst_port_counts * np.log2(dst_port_counts + 1e-10))
+        
+        # Source Port Entropy
+        src_port_counts = group['Sport'].dropna().value_counts(normalize=True)
+        h_sport = -np.sum(src_port_counts * np.log2(src_port_counts + 1e-10))
+>>>>>>> 5c84ce1859aea5a49a736b66cb5976e338e02dd3
+        
+        # Dominant label in this window
         dominant_label = group['Label'].value_counts().idxmax()
         has_botnet = 'Botnet' in group['Label'].values
         
@@ -237,36 +266,36 @@ def compute_entropy_preview(df: pd.DataFrame,
     df_ent = pd.DataFrame(entropies)
     
     if df_ent.empty:
-        print("[WARN] Pas assez de données pour calculer l'entropie.")
+        print("[WARN] Not enough data to compute entropy.")
         return df_ent
     
-    # Visualisation
+    # Visualization
     fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
     
     entropy_cols = [
-        ('H_dst_ip',   'Entropie IP destination',  '#3498db'),
-        ('H_dst_port', 'Entropie Port destination', '#e67e22'),
-        ('H_src_port', 'Entropie Port source',      '#9b59b6'),
+        ('H_dst_ip',   'Destination IP Entropy',  '#3498db'),
+        ('H_dst_port', 'Destination Port Entropy', '#e67e22'),
+        ('H_src_port', 'Source Port Entropy',      '#9b59b6'),
     ]
     
     for ax, (col, title, color) in zip(axes, entropy_cols):
         ax.plot(df_ent['time'], df_ent[col], color=color,
                 linewidth=0.8, alpha=0.8, label=title)
         
-        # Marquer les fenêtres avec du trafic botnet
+        # Mark windows with botnet traffic
         botnet_times = df_ent[df_ent['has_botnet']]['time']
         botnet_vals  = df_ent[df_ent['has_botnet']][col]
         ax.scatter(botnet_times, botnet_vals,
                    color=COLORS['Botnet'], s=8, alpha=0.5,
-                   label='Fenêtre avec botnet', zorder=5)
+                   label='Window with botnet', zorder=5)
         
         ax.set_ylabel(title)
         ax.legend(loc='upper right', fontsize=8)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     
-    axes[-1].set_xlabel('Heure')
+    axes[-1].set_xlabel('Time')
     plt.suptitle(
-        f"Évolution de l'entropie du trafic (fenêtres de {window_seconds}s)",
+        f"Evolution of Traffic Entropy ({window_seconds}s windows)",
         fontsize=12
     )
     plt.tight_layout()
@@ -276,7 +305,15 @@ def compute_entropy_preview(df: pd.DataFrame,
     return df_ent
 
 
-# ── Utilitaires ──────────────────────────────────────────────────────────────
+# ── Utilities ──────────────────────────────────────────────────────────────
+
+def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
+    """Saves a figure to the results/ folder."""
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    filepath = Path(save_dir) / filename
+    fig.savefig(filepath, bbox_inches='tight')
+    print(f"[INFO] Figure saved: {filepath}")
+��──────────────────────────────────────
 
 def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
     """Sauvegarde une figure dans le dossier results/."""

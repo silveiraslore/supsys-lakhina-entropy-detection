@@ -1,6 +1,6 @@
 """
-Module de chargement et prétraitement du dataset CTU-13.
-Responsable : Membre 1
+CTU-13 Dataset Loading and Preprocessing Module.
+Responsible: Member 1
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import numpy as np
 import pandas as pd
 
 
-# ── Constantes ──────────────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────────
 
-# Colonnes du format .binetflow CTU-13
+# Columns of the CTU-13 .binetflow format
 COLUMNS = [
     'StartTime', 'Dur', 'Proto', 'SrcAddr', 'Sport',
     'Dir', 'DstAddr', 'Dport', 'State', 'sTos',
@@ -40,23 +40,23 @@ PREPROCESSING_VERSION = '2026-03-26'
 SPLIT_METADATA_FILENAME = 'metadata.json'
 
 
-# ── Fonctions principales ────────────────────────────────────────────────────
+# ── Main Functions ──────────────────────────────────────────────────────────
 
 def load_binetflow(filepath: str) -> pd.DataFrame:
     """
-    Charge un fichier .binetflow du CTU-13.
+    Loads a CTU-13 .binetflow file.
     
     Args:
-        filepath: Chemin vers le fichier .binetflow
+        filepath: Path to the .binetflow file
         
     Returns:
-        DataFrame pandas nettoyé
+        Cleaned pandas DataFrame
     """
     path = Path(filepath)
     if not path.exists():
-        raise FileNotFoundError(f"Fichier introuvable : {filepath}")
+        raise FileNotFoundError(f"File not found: {filepath}")
     
-    print(f"[INFO] Chargement de {path.name}...")
+    print(f"[INFO] Loading {path.name}...")
     
     df = pd.read_csv(
         path,
@@ -79,13 +79,13 @@ def load_binetflow(filepath: str) -> pd.DataFrame:
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Nettoie et normalise le DataFrame CTU-13.
+    Cleans and normalizes the CTU-13 DataFrame.
     
-    Étapes :
-    1. Normalisation des noms de colonnes
-    2. Conversion des types
-    3. Normalisation des labels
-    4. Suppression des lignes invalides
+    Steps:
+    1. Normalize column names
+    2. Convert types
+    3. Normalize labels
+    4. Remove invalid rows
     """
     df = df.copy()
 
@@ -141,7 +141,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.loc[~drop_mask].copy()
 
     n_after = len(df)
-    print(f"[INFO] Nettoyage : {n_before - n_after:,} lignes supprimées "
+    print(f"[INFO] Cleaning: {n_before - n_after:,} rows removed "
           f"({(n_before - n_after)/n_before*100:.1f}%)")
     if removal_stats:
         for reason, count in removal_stats.items():
@@ -168,15 +168,15 @@ def split_dataset(df: pd.DataFrame,
                   train_ratio: float = DEFAULT_TRAIN_RATIO,
                   val_ratio: float = DEFAULT_VAL_RATIO) -> tuple:
     """
-    Divise le dataset en train / validation / test de façon temporelle.
+    Splits the dataset into train / validation / test sets chronologically.
     
-    IMPORTANT : on coupe dans le temps (pas aléatoirement) pour simuler
-    un vrai déploiement IDS — le modèle n'a jamais "vu le futur".
+    IMPORTANT: we split based on time (not randomly) to simulate
+    a real IDS deployment — the model never "sees the future".
     
     Args:
-        df          : DataFrame trié par StartTime
-        train_ratio : proportion pour l'entraînement (défaut 60%)
-        val_ratio   : proportion pour la validation (défaut 20%)
+        df          : DataFrame sorted by StartTime
+        train_ratio : proportion for training (default 60%)
+        val_ratio   : proportion for validation (default 20%)
         
     Returns:
         (df_train, df_val, df_test)
@@ -321,7 +321,7 @@ def build_split_metadata(df_train: pd.DataFrame,
 # ── Fonctions utilitaires (privées) ─────────────────────────────────────────
 
 def _parse_port(val) -> float:
-    """Convertit un port en entier (gère le format hex du CTU-13)."""
+    """Converts a port to an integer (handles CTU-13 hex format)."""
     try:
         s = str(val).strip()
         if s.startswith('0x') or s.startswith('0X'):
@@ -364,9 +364,13 @@ def _build_source_signature(source_path: str | Path | None) -> dict | None:
 
 
 def _print_split_info(name: str, df: pd.DataFrame):
-    """Affiche les statistiques d'un split."""
+    """Prints statistics for a split."""
     counts = df['Label'].value_counts()
     total  = len(df)
+    if total == 0:
+        print(f"  {name:12s}: 0 flows")
+        return
+        
     print(f"  {name:12s}: {total:>8,} flows | "
           f"Botnet: {counts.get('Botnet', 0):>7,} "
           f"({counts.get('Botnet', 0)/total*100:4.1f}%) | "
@@ -374,3 +378,4 @@ def _print_split_info(name: str, df: pd.DataFrame):
           f"({counts.get('Normal', 0)/total*100:4.1f}%) | "
           f"Background: {counts.get('Background', 0):>7,} "
           f"({counts.get('Background', 0)/total*100:4.1f}%)")
+
