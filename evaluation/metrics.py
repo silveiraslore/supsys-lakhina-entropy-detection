@@ -1,14 +1,14 @@
 """
-Module de calcul des métriques de performance.
-Basé sur la méthodologie décrite dans García et al. 2014 (section 7).
+Performance metric computation utilities.
+Based on the methodology described in Garcia et al. 2014 (section 7).
 
-Responsable : Membre 4
+Responsible: Member 4
 
-Métriques calculées :
-    - Métriques classiques : Accuracy, Precision, Recall, F1, FPR, FNR
-    - Courbe ROC + AUC
-    - Matrice de confusion
-    - Métriques temporelles (inspirées de la section 7.2 de l'article)
+Computed metrics:
+    - Standard metrics: Accuracy, Precision, Recall, F1, FPR, FNR
+    - ROC curve + AUC
+    - Confusion matrix
+    - Temporal metrics inspired by section 7.2 of the paper
 """
 
 import os
@@ -30,7 +30,7 @@ from sklearn.metrics import (
 )
 
 
-# ── Style global ──────────────────────────────────────────────────────────────
+# Global plotting style
 plt.rcParams.update({
     'figure.dpi': 120,
     'axes.grid': True,
@@ -47,44 +47,44 @@ COLORS = {
 }
 
 
-# ── Classe principale ─────────────────────────────────────────────────────────
+# Main class
 
 class DetectionEvaluator:
     """
-    Évalue les performances d'un détecteur d'anomalies.
+    Evaluate the performance of an anomaly detector.
 
-    Utilisation :
+    Usage:
         evaluator = DetectionEvaluator(results_df)
         evaluator.print_report()
         evaluator.plot_all(save_dir='results/')
     
-    Le DataFrame results_df doit contenir :
-        - anomaly_score : score continu dans [0, 1]
-        - is_anomaly    : booléen (prédiction binaire)
-        - true_label    : label ground-truth ('Botnet', 'Normal', 'Background')
+    The `results_df` DataFrame must contain:
+        - anomaly_score: continuous score in [0, 1]
+        - is_anomaly: boolean binary prediction
+        - true_label: ground-truth label ('Botnet', 'Normal', 'Background')
     """
 
     def __init__(self, results: pd.DataFrame, threshold: float = 0.5):
         """
         Args:
-            results   : DataFrame retourné par LakhinaEntropyDetector.predict()
-            threshold : seuil utilisé pour la classification binaire
+            results: DataFrame returned by `LakhinaEntropyDetector.predict()`
+            threshold: binary classification threshold
         """
         if results.empty:
-            raise ValueError("Le DataFrame de résultats est vide.")
+            raise ValueError("The results DataFrame is empty.")
 
         required = {'anomaly_score', 'is_anomaly', 'true_label'}
         missing  = required - set(results.columns)
         if missing:
-            raise ValueError(f"Colonnes manquantes dans results : {missing}")
+            raise ValueError(f"Missing columns in results: {missing}")
 
         self.results   = results.copy()
         self.threshold = threshold
         self.results['is_anomaly'] = self.results['anomaly_score'] > self.threshold
 
-        self._unit_label = 'observations agrégées (fenêtre × IP source)'
+        self._unit_label = 'aggregated observations (time window x source IP)'
 
-        # Évaluation binaire honnête : Botnet vs Non-Botnet.
+        # Fair binary evaluation: Botnet vs Non-Botnet.
         self._df_eval = results.copy()
         self._df_eval['is_anomaly'] = self._df_eval['anomaly_score'] > self.threshold
         self._df_eval = self._df_eval[self._df_eval['true_label'].notna()].copy()
@@ -97,19 +97,19 @@ class DetectionEvaluator:
 
         if len(self._df_eval) == 0:
             raise ValueError(
-                "Aucune ligne évaluable dans les résultats. "
-                "Impossible d'évaluer."
+                "No evaluable rows remain in the results. "
+                "Evaluation is not possible."
             )
 
-        # Labels binaires : 1 = Botnet, 0 = Non-Botnet
+        # Binary labels: 1 = Botnet, 0 = Non-Botnet
         self._y_true  = (self._df_eval['true_label'] == 'Botnet').astype(int).values
         self._y_pred  = (self._df_eval['anomaly_score'] > self.threshold).astype(int).values
         self._scores  = self._df_eval['anomaly_score'].values
 
-    # ── Métriques de base ─────────────────────────────────────────────────
+    # Basic metrics
 
     def compute_confusion_matrix(self) -> dict:
-        """Calcule TP, TN, FP, FN."""
+        """Compute TP, TN, FP, and FN."""
         tp = int(np.sum((self._y_pred == 1) & (self._y_true == 1)))
         tn = int(np.sum((self._y_pred == 0) & (self._y_true == 0)))
         fp = int(np.sum((self._y_pred == 1) & (self._y_true == 0)))
@@ -117,12 +117,7 @@ class DetectionEvaluator:
         return {'TP': tp, 'TN': tn, 'FP': fp, 'FN': fn}
 
     def compute_metrics(self) -> dict:
-        """
-        Calcule toutes les métriques de performance.
-        
-        Returns:
-            Dictionnaire avec toutes les métriques.
-        """
+        """Compute all performance metrics."""
         cm = self.compute_confusion_matrix()
         tp, tn, fp, fn = cm['TP'], cm['TN'], cm['FP'], cm['FN']
 
@@ -152,7 +147,7 @@ class DetectionEvaluator:
             'FN':        fn,
             'Accuracy':  round(accuracy,  4),
             'Precision': round(precision, 4),
-            'Recall':    round(recall,    4),   # = TPR
+            'Recall':    round(recall,    4),   # equal to TPR
             'F1':        round(f1,        4),
             'FPR':       round(fpr,       4),
             'FNR':       round(fnr,       4),
@@ -167,17 +162,17 @@ class DetectionEvaluator:
             'N_normal': self._normal_count,
         }
 
-    # ── Rapport texte ─────────────────────────────────────────────────────
+    # Text report
 
     def print_report(self):
-        """Affiche un rapport complet des métriques."""
+        """Print a full metric report."""
         metrics = self.compute_metrics()
 
         print("\n" + "=" * 60)
-        print("  RAPPORT DE PERFORMANCE — LAKHINA ENTROPY DETECTOR")
+        print("  PERFORMANCE REPORT - LAKHINA ENTROPY DETECTOR")
         print("=" * 60)
 
-        print(f"\n  Dataset évalué ({self._unit_label}) :")
+        print(f"\n  Evaluated dataset ({self._unit_label}):")
         print(f"    Total        : {metrics['N_eval']:>8,}")
         print(f"    Botnet       : {metrics['N_botnet']:>8,} "
               f"({metrics['N_botnet']/metrics['N_eval']*100:.1f}%)")
@@ -186,75 +181,75 @@ class DetectionEvaluator:
         print(f"      Background : {metrics['N_background']:>8,}")
         print(f"      Normal     : {metrics['N_normal']:>8,}")
 
-        print(f"\n  Seuil utilisé : {metrics['Threshold']}")
+        print(f"\n  Threshold used: {metrics['Threshold']}")
 
-        print("\n  ── Matrice de confusion ──")
-        print(f"    TP (Botnet détecté)    : {metrics['TP']:>8,}")
-        print(f"    TN (Non-Botnet correct): {metrics['TN']:>8,}")
-        print(f"    FP (Fausse alarme)     : {metrics['FP']:>8,}")
-        print(f"    FN (Botnet manqué)     : {metrics['FN']:>8,}")
+        print("\n  -- Confusion matrix --")
+        print(f"    TP (Botnet detected)    : {metrics['TP']:>8,}")
+        print(f"    TN (Non-Botnet correct) : {metrics['TN']:>8,}")
+        print(f"    FP (False alarm)        : {metrics['FP']:>8,}")
+        print(f"    FN (Missed botnet)      : {metrics['FN']:>8,}")
 
-        print("\n  ── Métriques de performance ──")
+        print("\n  -- Performance metrics --")
 
         def bar(val, width=30):
-            """Mini barre de progression."""
+            """Return a compact ASCII progress bar."""
             filled = int(val * width)
-            return '█' * filled + '░' * (width - filled)
+            return '#' * filled + '-' * (width - filled)
 
         metrics_display = [
-            ('Accuracy',  metrics['Accuracy'],  'Taux de classifications correctes'),
-            ('Precision', metrics['Precision'], 'Parmi les alarmes, % vrais botnets'),
-            ('Recall',    metrics['Recall'],    'Parmi les botnets, % détectés (TPR)'),
-            ('F1-Score',  metrics['F1'],        'Moyenne harmonique Precision/Recall'),
-            ('FPR',       metrics['FPR'],       'Taux de fausses alarmes'),
-            ('FNR',       metrics['FNR'],       'Taux de botnets manqués'),
-            ('TNR',       metrics['TNR'],       'Taux de non-botnets correctement classés'),
-            ('AUC-ROC',   metrics['AUC_ROC'],   'Aire sous la courbe ROC'),
-            ('PR-AUC',    metrics['PR_AUC'],    'Average precision sur la courbe PR'),
+            ('Accuracy',  metrics['Accuracy'],  'Share of correct classifications'),
+            ('Precision', metrics['Precision'], 'Among alerts, share of true botnets'),
+            ('Recall',    metrics['Recall'],    'Among botnets, share detected (TPR)'),
+            ('F1-Score',  metrics['F1'],        'Harmonic mean of precision and recall'),
+            ('FPR',       metrics['FPR'],       'False alarm rate'),
+            ('FNR',       metrics['FNR'],       'Missed botnet rate'),
+            ('TNR',       metrics['TNR'],       'Correct non-botnet rejection rate'),
+            ('AUC-ROC',   metrics['AUC_ROC'],   'Area under the ROC curve'),
+            ('PR-AUC',    metrics['PR_AUC'],    'Average precision on the PR curve'),
         ]
 
         for name, val, desc in metrics_display:
             if np.isnan(val):
-                print(f"    {name:12s}: {'N/A':>6}  — {desc}")
+                print(f"    {name:12s}: {'N/A':>6}  - {desc}")
             else:
                 print(f"    {name:12s}: {val:>6.4f}  {bar(val)}  {desc}")
 
-        print("\n  ── Interprétation ──")
+        print("\n  -- Interpretation --")
         self._interpret(metrics)
         print("=" * 60)
 
     def _interpret(self, metrics: dict):
-        """Fournit une interprétation automatique des résultats."""
+        """Provide a compact automatic interpretation of the results."""
         f1  = metrics['F1']
         fpr = metrics['FPR']
         fnr = metrics['FNR']
 
-        # Qualité globale
+        # Overall detection quality
         if f1 >= 0.80:
-            print("  ✅ Excellente détection (F1 ≥ 0.80)")
+            print("  Excellent detection (F1 >= 0.80)")
         elif f1 >= 0.60:
-            print("  ✔️  Bonne détection (F1 ≥ 0.60)")
+            print("  Good detection (F1 >= 0.60)")
         elif f1 >= 0.40:
-            print("  ⚠️  Détection correcte mais améliorable (F1 ≥ 0.40)")
+            print("  Acceptable but improvable detection (F1 >= 0.40)")
         else:
-            print("  ❌ Détection faible (F1 < 0.40) — revoir le seuil ou les features")
+            print("  Weak detection (F1 < 0.40) - revisit threshold or features")
 
-        # Fausses alarmes
+        # False alarms
         if fpr > 0.20:
-            print(f"  ⚠️  FPR élevé ({fpr:.1%}) : beaucoup de fausses alarmes")
+            print(f"  High FPR ({fpr:.1%}): many false alarms")
         elif fpr < 0.05:
-            print(f"  ✅ FPR faible ({fpr:.1%}) : peu de fausses alarmes")
+            print(f"  Low FPR ({fpr:.1%}): few false alarms")
 
-        # Botnets manqués
+        # Missed botnets
         if fnr > 0.50:
-            print(f"  ⚠️  FNR élevé ({fnr:.1%}) : plus de la moitié des botnets manqués")
+            print(f"  High FNR ({fnr:.1%}): more than half of botnets are missed")
         elif fnr < 0.20:
-            print(f"  ✅ FNR faible ({fnr:.1%}) : peu de botnets manqués")
+            print(f"  Low FNR ({fnr:.1%}): few botnets are missed")
 
-    # ── Visualisations ────────────────────────────────────────────────────
+    # Visualizations
 
     def plot_all(self, save_dir: str = 'results/'):
-        """Lance toutes les visualisations."""
+        """Run all visualizations."""
         self.plot_confusion_matrix(save_dir)
         self.plot_roc_curve(save_dir)
         self.plot_precision_recall_curve(save_dir)
@@ -262,7 +257,7 @@ class DetectionEvaluator:
         self.plot_metrics_over_time(save_dir)
 
     def plot_confusion_matrix(self, save_dir: str = 'results/'):
-        """Visualise la matrice de confusion."""
+        """Visualize the confusion matrix."""
         cm     = self.compute_confusion_matrix()
         matrix = np.array([
             [cm['TN'], cm['FP']],
@@ -277,13 +272,13 @@ class DetectionEvaluator:
             fmt='d',
             cmap='Blues',
             ax=ax,
-            xticklabels=['Prédit Non-Botnet', 'Prédit Botnet'],
-            yticklabels=['Réel Non-Botnet',   'Réel Botnet'],
+            xticklabels=['Predicted Non-Botnet', 'Predicted Botnet'],
+            yticklabels=['Actual Non-Botnet',   'Actual Botnet'],
             linewidths=1,
-            cbar_kws={'label': 'Nombre d’observations'},
+            cbar_kws={'label': 'Number of observations'},
         )
 
-        # Annotations supplémentaires
+        # Extra percentage annotations
         total = matrix.sum()
         for i in range(2):
             for j in range(2):
@@ -294,18 +289,18 @@ class DetectionEvaluator:
                         ha='center', va='center',
                         fontsize=9, color='gray')
 
-        ax.set_title(f'Matrice de confusion\n(seuil = {self.threshold:.3f})')
-        ax.set_ylabel('Vérité terrain')
-        ax.set_xlabel('Prédiction')
+        ax.set_title(f'Confusion matrix\n(threshold = {self.threshold:.3f})')
+        ax.set_ylabel('Ground truth')
+        ax.set_xlabel('Prediction')
 
         plt.tight_layout()
         _save_fig(fig, save_dir, 'confusion_matrix.png')
         _maybe_show()
 
     def plot_roc_curve(self, save_dir: str = 'results/'):
-        """Trace la courbe ROC."""
+        """Plot the ROC curve."""
         if len(np.unique(self._y_true)) < 2:
-            print("[WARN] ROC curve impossible : un seul label dans les données.")
+            print("[WARN] ROC curve is unavailable: only one label is present.")
             return
 
         fpr_vals, tpr_vals, thresholds = roc_curve(self._y_true, self._scores)
@@ -313,27 +308,27 @@ class DetectionEvaluator:
 
         fig, ax = plt.subplots(figsize=(7, 6))
 
-        # Courbe ROC
+        # ROC curve
         ax.plot(fpr_vals, tpr_vals,
                 color=COLORS['detector'], lw=2,
                 label=f'Lakhina Entropy (AUC = {roc_auc:.4f})')
 
-        # Ligne de référence aléatoire
+        # Random reference line
         ax.plot([0, 1], [0, 1],
                 color='gray', lw=1, linestyle='--',
-                label='Classifieur aléatoire (AUC = 0.50)')
+                label='Random classifier (AUC = 0.50)')
 
-        # Marquer le seuil actuel
+        # Mark the current threshold operating point
         metrics = self.compute_metrics()
         ax.scatter(metrics['FPR'], metrics['Recall'],
                    color=COLORS['Botnet'], s=100, zorder=5,
-                   label=f'Seuil actuel ({self.threshold:.3f})')
+                   label=f'Current threshold ({self.threshold:.3f})')
 
         ax.fill_between(fpr_vals, tpr_vals, alpha=0.1, color=COLORS['detector'])
 
         ax.set_xlabel('False Positive Rate (FPR)')
         ax.set_ylabel('True Positive Rate (TPR / Recall)')
-        ax.set_title('Courbe ROC — Lakhina Entropy Detector')
+        ax.set_title('ROC Curve - Lakhina Entropy Detector')
         ax.legend(loc='lower right')
         ax.set_xlim([0, 1])
         ax.set_ylim([0, 1.02])
@@ -343,9 +338,9 @@ class DetectionEvaluator:
         _maybe_show()
 
     def plot_precision_recall_curve(self, save_dir: str = 'results/'):
-        """Trace la courbe Precision-Recall."""
+        """Plot the precision-recall curve."""
         if len(np.unique(self._y_true)) < 2:
-            print("[WARN] PR curve impossible : un seul label dans les données.")
+            print("[WARN] PR curve is unavailable: only one label is present.")
             return
 
         precisions, recalls, _ = precision_recall_curve(
@@ -359,22 +354,22 @@ class DetectionEvaluator:
                 color=COLORS['detector'], lw=2,
                 label=f'Lakhina Entropy (AUC = {pr_auc:.4f})')
 
-        # Marquer le seuil actuel
+        # Mark the current threshold operating point
         metrics = self.compute_metrics()
         ax.scatter(metrics['Recall'], metrics['Precision'],
                    color=COLORS['Botnet'], s=100, zorder=5,
-                   label=f'Seuil actuel ({self.threshold:.3f})')
+                   label=f'Current threshold ({self.threshold:.3f})')
 
-        # Ligne de référence (classifieur aléatoire)
+        # Random baseline
         baseline = self._y_true.mean()
         ax.axhline(y=baseline, color='gray', linestyle='--', lw=1,
-                   label=f'Baseline aléatoire ({baseline:.3f})')
+                   label=f'Random baseline ({baseline:.3f})')
 
         ax.fill_between(recalls, precisions, alpha=0.1, color=COLORS['detector'])
 
         ax.set_xlabel('Recall (TPR)')
         ax.set_ylabel('Precision')
-        ax.set_title('Courbe Precision-Recall — Lakhina Entropy Detector')
+        ax.set_title('Precision-Recall Curve - Lakhina Entropy Detector')
         ax.legend(loc='upper right')
         ax.set_xlim([0, 1])
         ax.set_ylim([0, 1.02])
@@ -385,12 +380,12 @@ class DetectionEvaluator:
 
     def plot_score_distribution(self, save_dir: str = 'results/'):
         """
-        Distribution des scores d'anomalie par label.
-        Montre à quel point les botnets se distinguent du trafic normal.
+        Plot anomaly score distributions by label.
+        This helps show how well botnet traffic separates from normal traffic.
         """
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-        # Histogramme
+        # Histogram
         for label in ['Botnet', 'Non-Botnet']:
             subset = self._df_eval[self._df_eval['true_label'] == label]
             if len(subset) == 0:
@@ -407,10 +402,10 @@ class DetectionEvaluator:
 
         axes[0].axvline(x=self.threshold,
                         color='black', linestyle='--', lw=1.5,
-                        label=f'Seuil ({self.threshold:.3f})')
-        axes[0].set_xlabel('Score d\'anomalie')
-        axes[0].set_ylabel('Densité')
-        axes[0].set_title('Distribution des scores d\'anomalie')
+                        label=f'Threshold ({self.threshold:.3f})')
+        axes[0].set_xlabel('Anomaly score')
+        axes[0].set_ylabel('Density')
+        axes[0].set_title('Anomaly score distribution')
         axes[0].legend()
 
         # Box plot
@@ -429,26 +424,26 @@ class DetectionEvaluator:
 
         axes[1].axhline(y=self.threshold,
                         color='black', linestyle='--', lw=1.5,
-                        label=f'Seuil ({self.threshold:.3f})')
-        axes[1].set_ylabel('Score d\'anomalie')
-        axes[1].set_title('Boxplot des scores par label')
+                        label=f'Threshold ({self.threshold:.3f})')
+        axes[1].set_ylabel('Anomaly score')
+        axes[1].set_title('Score box plot by label')
         axes[1].legend()
 
-        plt.suptitle('Séparabilité des scores d\'anomalie', fontsize=12)
+        plt.suptitle('Anomaly score separability', fontsize=12)
         plt.tight_layout()
         _save_fig(fig, save_dir, 'score_distribution.png')
         _maybe_show()
 
     def plot_metrics_over_time(self, save_dir: str = 'results/'):
         """
-        Trace l'évolution des métriques dans le temps (par fenêtre temporelle).
-        Inspiré des figures 6, 8, 10, 12, 14 de l'article García et al. 2014.
+        Plot metric evolution over time, one value per time window.
+        Inspired by figures 6, 8, 10, 12, and 14 in Garcia et al. 2014.
         """
         if 'time_window' not in self._df_eval.columns:
-            print("[WARN] Colonne 'time_window' manquante, skip.")
+            print("[WARN] Missing 'time_window' column, skipping plot.")
             return
         if 'time' not in self._df_eval.columns:
-            print("[WARN] Colonne 'time' manquante, skip.")
+            print("[WARN] Missing 'time' column, skipping plot.")
             return
 
         records = []
@@ -479,8 +474,7 @@ class DetectionEvaluator:
             })
 
         if not records:
-            print("[WARN] Pas assez de fenêtres avec les deux labels pour "
-                  "tracer l'évolution temporelle.")
+            print("[WARN] Not enough windows contain both labels to plot temporal evolution.")
             return
 
         df_time = pd.DataFrame(records).sort_values('time')
@@ -499,9 +493,9 @@ class DetectionEvaluator:
                     linestyle=ls, color=color, lw=1.5,
                     label=label, alpha=0.85)
 
-        ax.set_xlabel('Temps')
-        ax.set_ylabel('Métrique (%)')
-        ax.set_title('Évolution temporelle des métriques de détection')
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Metric (%)')
+        ax.set_title('Temporal evolution of detection metrics')
         ax.legend(loc='upper right')
         ax.set_ylim([0, 105])
 
@@ -510,30 +504,30 @@ class DetectionEvaluator:
         _maybe_show()
 
     def save_results_csv(self, save_dir: str = 'results/'):
-        """Sauvegarde les métriques dans un fichier CSV."""
+        """Save metrics to a CSV file."""
         metrics = self.compute_metrics()
         df_metrics = pd.DataFrame([metrics])
 
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         filepath = Path(save_dir) / 'metrics_summary.csv'
         df_metrics.to_csv(filepath, index=False)
-        print(f"[INFO] Métriques sauvegardées : {filepath}")
+        print(f"[INFO] Metrics saved: {filepath}")
 
         return df_metrics
 
 
-# ── Utilitaires ───────────────────────────────────────────────────────────────
+# Helper functions
 
 def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
-    """Sauvegarde une figure."""
+    """Save a figure to disk."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     filepath = Path(save_dir) / filename
     fig.savefig(filepath, bbox_inches='tight')
-    print(f"[INFO] Figure sauvegardée : {filepath}")
+    print(f"[INFO] Figure saved: {filepath}")
 
 
 def _maybe_show():
-    """Affiche la figure seulement si le backend est interactif."""
+    """Display the figure only when the backend is interactive."""
     backend = plt.get_backend().lower()
     if 'agg' not in backend:
         plt.show()

@@ -1,0 +1,519 @@
+\documentclass{article}
+
+\usepackage[english]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,top=2cm,bottom=2cm,left=3cm,right=3cm]{geometry}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{gray!10},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  extendedchars=true,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  stringstyle=\color{orange},
+  showstringspaces=false,
+  language=Python,
+  literate=
+    {á}{{\'a}}1 {à}{{\`a}}1 {â}{{\^a}}1 {ä}{{\"a}}1
+    {ç}{{\c c}}1
+    {é}{{\'e}}1 {è}{{\`e}}1 {ê}{{\^e}}1 {ë}{{\"e}}1
+    {í}{{\'i}}1 {ì}{{\`i}}1 {î}{{\^i}}1 {ï}{{\"i}}1
+    {ó}{{\'o}}1 {ò}{{\`o}}1 {ô}{{\^o}}1 {ö}{{\"o}}1
+    {ú}{{\'u}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {ü}{{\"u}}1
+    {É}{{\'E}}1 {È}{{\`E}}1 {Ê}{{\^E}}1 {Ë}{{\"E}}1
+    {œ}{{\oe}}1
+    {Σ}{{$\Sigma$}}1 {λ}{{$\lambda$}}1 {±}{{$\pm$}}1
+    {≥}{{$\ge$}}1 {×}{{$\times$}}1
+    {→}{{$\rightarrow$}}1 {←}{{$\leftarrow$}}1
+    {—}{{--}}1 {’}{{'}}1
+    {─}{{-}}1 {═}{{=}}1 {║}{{|}}1
+    {╔}{{+}}1 {╗}{{+}}1 {╚}{{+}}1 {╝}{{+}}1
+    {█}{{\#}}1 {░}{{.}}1
+    {✓}{{[OK]}}1 {✅}{{[OK]}}1 {✔️}{{[OK]}}2
+    {❌}{{[X]}}1 {⚠️}{{[WARN]}}2
+}
+
+\title{Exploitation Report\\
+\large Botnet Detection using the Lakhina Entropy Method\\
+CTU-13 Dataset --- Scenario 9}
+
+\author{
+  SANTOS Lorena \and
+  AHMAR Rana Ali \and
+  BROU Yao \and
+  MUSTAFA Abbas
+}
+
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents the implementation and evaluation of a botnet detection pipeline inspired by the Lakhina Entropy method, applied to the CTU-13 dataset, Scenario 9. The implemented pipeline first cleans the CTU-13 bidirectional flow records, then filters TCP traffic and aggregates flows by source IP. For each source IP, entropy-based features are computed from source ports, destination ports, destination IP addresses, and TCP state values. A PCA model is then fitted on the resulting feature matrix, and two anomaly scores, referred to as \emph{major} and \emph{minor} scores, are derived from the PCA subspaces. The decision boundary is calibrated on the validation set through a two-dimensional threshold search. On the test set, the current implementation reaches a Precision of 0.4444, a Recall of 0.8000, and an F1-score of 0.5714, with calibrated thresholds $\tau_{\text{major}} = 121.1087$ and $\tau_{\text{minor}} = 44.3569$.
+\end{abstract}
+
+\section{Motivation and Selection of a Dataset Subpart}
+
+\subsection{Context and Motivation}
+
+Botnets remain a major threat in operational network security because infected hosts tend to communicate in repetitive and structured ways with a limited set of peers or services. This regularity makes statistical traffic analysis particularly attractive. The general intuition behind entropy-based methods is that a host repeatedly contacting the same destinations or ports produces a less diverse communication pattern than a host engaged in ordinary activity.
+
+The Lakhina family of methods operationalizes this idea by building traffic feature distributions and projecting them into a lower-dimensional representation using PCA \cite{lakhina2005}. In the current project, the implemented detector follows this spirit but uses a TCP-focused, source-IP aggregation pipeline rather than a direct reproduction of a normalized residual-based time-window model.
+
+\subsection{The CTU-13 Dataset}
+
+The CTU-13 dataset \cite{ctu13} was created at the Czech Technical University in 2011 and contains thirteen scenarios mixing botnet, normal, and background traffic captured in a controlled environment. Each scenario corresponds to a different malware execution trace.
+
+The dataset uses the \texttt{.binetflow} format, with key columns including:
+\begin{itemize}
+  \item \texttt{StartTime}: timestamp of the flow
+  \item \texttt{SrcAddr}, \texttt{DstAddr}: source and destination IP addresses
+  \item \texttt{Sport}, \texttt{Dport}: source and destination ports
+  \item \texttt{Proto}: transport protocol
+  \item \texttt{Dur}, \texttt{TotPkts}, \texttt{TotBytes}, \texttt{SrcBytes}: traffic volume descriptors
+  \item \texttt{Label}: ground-truth traffic annotation
+\end{itemize}
+
+\subsection{Selection of Scenario 9}
+
+We selected \textbf{Scenario 9} (CTU-Malware-Capture-Botnet-50, captured on 17 August 2011) for three main reasons:
+\begin{itemize}
+  \item It is a large scenario, containing 2{,}087{,}508 cleaned flows after preprocessing, which is sufficient for a meaningful temporal train/validation/test split.
+  \item The botnet becomes strongly active in the second half of the capture, which makes a chronological evaluation realistic for IDS-style deployment.
+  \item The scenario remains highly imbalanced, with Background traffic dominating the capture, which reflects real network monitoring conditions.
+\end{itemize}
+
+\subsection{Class Distribution}
+
+After preprocessing, the dataset contains the following class distribution:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrr}
+\toprule
+\textbf{Label} & \textbf{Flow count} & \textbf{Percentage} \\
+\midrule
+Background & 1{,}872{,}554 & 89.70\% \\
+Botnet     &   184{,}987   &  8.86\% \\
+Normal     &    29{,}967   &  1.44\% \\
+\bottomrule
+\end{tabular}
+\caption{Label distribution in CTU-13 Scenario 9 after preprocessing.}
+\label{tab:class_distribution}
+\end{table}
+
+Contrary to an earlier assumption, Normal traffic is not absent from Scenario 9 after the current preprocessing pipeline. This correction materially changes both the descriptive statistics and the interpretation of the downstream evaluation.
+
+\subsection{Temporal Data Split}
+
+The dataset is split \textbf{chronologically}, not randomly, in order to simulate realistic deployment conditions where the detector is trained on past traffic and evaluated on future traffic:
+
+\begin{itemize}
+  \item \textbf{Train}: 1{,}252{,}504 flows
+  \item \textbf{Validation}: 417{,}502 flows
+  \item \textbf{Test}: 417{,}502 flows
+\end{itemize}
+
+This temporal split avoids information leakage from future traffic into the model selection process.
+
+\section{Statistical Dataset Analysis}
+\label{sec:stats}
+
+\subsection{Data Preprocessing}
+
+Before any analysis, the raw \texttt{.binetflow} file is processed as follows:
+
+\begin{enumerate}
+  \item \textbf{Column normalization}: whitespace is removed from column names.
+  \item \textbf{Type conversion}: \texttt{StartTime} is parsed as a datetime, and \texttt{Dur}, \texttt{TotPkts}, \texttt{TotBytes}, and \texttt{SrcBytes} are converted to numeric values.
+  \item \textbf{Port parsing}: \texttt{Sport} and \texttt{Dport} can appear in hexadecimal form (for example \texttt{0x0050}); these values are converted into integers.
+  \item \textbf{Label normalization}: labels are mapped by substring matching, so values containing \texttt{botnet} become \texttt{Botnet}, values containing \texttt{normal} or \texttt{legitimate} become \texttt{Normal}, and values containing \texttt{background} become \texttt{Background}.
+  \item \textbf{Invalid row filtering}: rows with missing timestamps, unknown labels, missing source or destination addresses, negative durations, negative packet counts, negative total bytes, or negative source bytes are discarded.
+  \item \textbf{Chronological sorting}: the cleaned flows are sorted by \texttt{StartTime}.
+\end{enumerate}
+
+With the current Scenario 9 source file, this preprocessing removes 0 rows.
+
+\subsection{Traffic Over Time}
+
+Figure~\ref{fig:traffic_time} shows the temporal evolution of the three traffic classes using 5-minute windows. Botnet traffic becomes strongly active in the second half of the capture, while Background traffic remains dominant throughout the trace. Normal traffic is present across many windows and is not limited to only a handful of isolated flows.
+
+This temporal organization still justifies the chronological split, although the training split already contains some botnet traffic and therefore does not represent a purely attack-free baseline.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{traffic_time.png}
+    \caption{Traffic over time for Background, Botnet, and Normal traffic.}
+    \label{fig:traffic_time}
+\end{figure}
+
+\subsection{Label Distribution}
+
+The extreme imbalance between classes has direct consequences for model evaluation. A naive classifier predicting only the majority class would already obtain a high accuracy. For this reason, the final detector is evaluated using binary metrics focused on malicious aggregated source IP detection versus non-botnet aggregated source IPs.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{label_dist.png}
+    \caption{Label distribution after preprocessing.}
+    \label{fig:label_dist}
+\end{figure}
+
+\subsection{Feature Distributions}
+
+Figure~\ref{fig:feat_dist} compares the distributions of the main numerical flow-level variables for Botnet, Normal, and Background traffic. These plots provide descriptive intuition about the capture, but they should not be confused with the final detector input. The implemented detector does not classify flows directly; instead, it aggregates TCP flows by source IP and then computes entropy-based summary features.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{feature_distributions.png}
+    \caption{Flow-level feature distributions for the three classes.}
+    \label{fig:feat_dist}
+\end{figure}
+
+\subsection{Protocol Distribution}
+
+Figure~\ref{fig:protocol} shows the distribution of labels within each protocol. It shows that ARP, ICMP, IGMP, IPv6, and related protocols are almost exclusively Background traffic (100\%). In the cleaned dataset, TCP traffic is composed of 79.36\% Background, 17.88\% Botnet, and 2.76\% Normal traffic, whereas UDP traffic is composed of 92.28\% Background, 6.62\% Botnet, and 1.11\% Normal traffic. This supports the design choice of focusing on TCP in the current implementation, especially because TCP state information is also exploited through the entropy of the \texttt{State} field.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.85\textwidth]{protocol_by_label.png}
+    \caption{Label proportion by protocol.}
+    \label{fig:protocol}
+\end{figure}
+
+\section{Motivation and Selection of the Detection Approach}
+
+\subsection{Choice of the Lakhina Entropy Method}
+
+Among the anomaly-detection approaches discussed in the CAMNEP comparison study \cite{garcia2014}, the Lakhina-style entropy/PCA family is particularly appealing because it provides an interpretable bridge between traffic diversity measures and anomaly scoring. In the current project, the implemented detector preserves this intuition while adapting it to the local codebase and dataset preparation pipeline.
+
+The main advantages of this choice are:
+\begin{itemize}
+  \item \textbf{Interpretability}: each entropy feature captures a meaningful aspect of communication diversity.
+  \item \textbf{Compact representation}: PCA summarizes the main structure of the aggregated feature space.
+  \item \textbf{Label-independent fitting}: labels are not used when fitting the PCA model itself, although the training split still contains some malicious traffic.
+\end{itemize}
+
+\subsection{Core Principle}
+
+The implemented detector first filters TCP traffic and then aggregates flows by source IP over each split. Each source IP is transformed into a compact feature profile describing how diverse its communications are. If an IP repeatedly contacts the same destinations or uses a highly repetitive TCP state pattern, its entropy-based profile differs from the bulk of the traffic and may appear anomalous under the PCA representation.
+
+\subsection{Shannon Entropy}
+
+For a discrete variable $X$, Shannon entropy is defined as:
+\begin{equation}
+H(X) = -\sum_x p(x)\log_2 p(x)
+\end{equation}
+
+The current implementation uses \textbf{raw Shannon entropy}, not a normalized entropy in $[0,1]$. Four entropy features are computed for each aggregated source IP:
+\begin{itemize}
+  \item \texttt{SrcPortEntropy}
+  \item \texttt{DestPortEntropy}
+  \item \texttt{DestIPEntropy}
+  \item \texttt{FlagEntropy}
+\end{itemize}
+
+In addition, TCP flag frequencies are also computed during aggregation, although the PCA stage relies on the four entropy features listed above.
+
+\subsection{PCA-Based Dual-Score Anomaly Scoring}
+
+The PCA stage is fitted on the standardized train feature matrix. Rather than keeping only a fixed number of principal components and computing a single reconstruction residual, the current implementation keeps all significant components and splits them into a \emph{major} subspace and a \emph{minor} subspace.
+
+Let $z_{\text{major}}$ and $z_{\text{minor}}$ denote the projections onto these subspaces, and let $\lambda_{\text{major}}$ and $\lambda_{\text{minor}}$ denote the corresponding eigenvalues. The anomaly scores are then computed as:
+\begin{equation}
+\text{score}_{\text{major}} = \sum \frac{z_{\text{major}}^2}{\lambda_{\text{major}}^2}
+\end{equation}
+\begin{equation}
+\text{score}_{\text{minor}} = \sum \frac{z_{\text{minor}}^2}{\lambda_{\text{minor}}^2}
+\end{equation}
+
+An aggregated source IP is classified as malicious if either score exceeds its respective calibrated threshold:
+\begin{equation}
+\text{malicious} \iff \left(\text{score}_{\text{major}} > \tau_{\text{major}}\right) \lor \left(\text{score}_{\text{minor}} > \tau_{\text{minor}}\right)
+\end{equation}
+
+\subsection{Pseudo-code: Step-by-Step Implementation}
+
+\subsubsection*{Step 1 --- Feature preparation}
+
+\begin{lstlisting}[caption={Feature preparation in the current implementation}]
+FUNCTION prepare_features(flows):
+
+  keep only TCP flows
+  derive TCP flag columns from State
+
+  aggregated_rows <- []
+
+  FOR each source IP:
+      group_ip <- all TCP flows of that source IP
+
+      compute flag frequencies
+      compute:
+          SrcPortEntropy
+          DestPortEntropy
+          DestIPEntropy
+          FlagEntropy
+
+      aggregated_label <- 1
+          if at least one raw label contains "From-Botnet"
+          else 0
+
+      append aggregated source-IP profile
+
+  RETURN aggregated feature table
+\end{lstlisting}
+
+\subsubsection*{Step 2 --- Training phase}
+
+\begin{lstlisting}[caption={PCA fitting in the current implementation}]
+FUNCTION fit(train_flows):
+
+  train_features <- prepare_features(train_flows)
+  X_train        <- [SrcPortEntropy, DestPortEntropy,
+                     DestIPEntropy, FlagEntropy]
+
+  scaler   <- StandardScaler()
+  X_scaled <- scaler.fit_transform(X_train)
+
+  pca <- PCA(n_components=None)
+  pca.fit(X_scaled)
+
+  keep significant PCA components
+  split them into major and minor subspaces
+
+  STORE scaler, pca, significant_components, eigenvalues
+\end{lstlisting}
+
+\subsubsection*{Step 3 --- Scoring phase}
+
+\begin{lstlisting}[caption={Major/minor anomaly scoring}]
+FUNCTION score(flows):
+
+  features <- prepare_features(flows)
+  X        <- [SrcPortEntropy, DestPortEntropy,
+               DestIPEntropy, FlagEntropy]
+  X_scaled <- scaler.transform(X)
+
+  score_major <- PCA-based major score
+  score_minor <- PCA-based minor score
+
+  RETURN {features, score_major, score_minor}
+\end{lstlisting}
+
+\subsubsection*{Step 4 --- Threshold calibration}
+
+\begin{lstlisting}[caption={Two-dimensional threshold calibration}]
+FUNCTION calibrate_thresholds(val_flows, n_thresholds=80):
+
+  results <- score(val_flows)
+  y_true  <- aggregated malicious labels
+
+  candidate_major <- linspace(min(score_major),
+                              max(score_major),
+                              n_thresholds)
+  candidate_minor <- linspace(min(score_minor),
+                              max(score_minor),
+                              n_thresholds)
+
+  FOR each pair (t_major, t_minor):
+      y_pred <- (score_major > t_major) OR
+                (score_minor > t_minor)
+      compute Precision, Recall, F1, FPR
+
+  select pair maximizing F1
+  use lowest FPR as tie-breaker
+
+  RETURN tau_major, tau_minor
+\end{lstlisting}
+
+\subsubsection*{Complete pipeline summary}
+
+\begin{lstlisting}[caption={Complete pipeline: from raw flows to evaluation}]
+INPUT: CTU-13 Scenario 9 (.binetflow) -- 2,087,508 cleaned flows
+SPLIT: 60% train | 20% validation | 20% test (temporal)
+
+PHASE 1: TRAINING
+1. Filter TCP flows
+2. Aggregate flows by source IP
+3. Compute source-IP entropy feature table
+4. Standardise feature matrix
+5. Fit PCA on train aggregated features
+6. Derive major and minor anomaly scores
+
+PHASE 2: THRESHOLD CALIBRATION
+7. Score validation aggregated source IPs
+8. Scan threshold pairs (tau_major, tau_minor)
+9. Select pair maximizing F1
+   Result:
+      tau_major = 121.1087
+      tau_minor = 44.3569
+
+PHASE 3: EVALUATION
+10. Score test aggregated source IPs
+11. Predict malicious if:
+      score_major > tau_major OR
+      score_minor > tau_minor
+12. Compare predictions to aggregated malicious labels
+\end{lstlisting}
+
+\section{Results Analysis}
+\label{sec:results}
+
+\subsection{Detection Performance}
+
+The current implementation is evaluated on 3{,}424 aggregated source IPs in the test split. Among them, 10 are labeled malicious and 3{,}414 are labeled non-botnet. Using the calibrated thresholds $\tau_{\text{major}} = 121.1087$ and $\tau_{\text{minor}} = 44.3569$, the detector obtains the following results:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Metric} & \textbf{Value} & \textbf{Interpretation} \\
+\midrule
+TP (Malicious detected) & 8    & Malicious aggregated source IPs correctly flagged \\
+TN (Non-botnet correct) & 3404 & Non-botnet aggregated source IPs correctly rejected \\
+FP (False alarm)        & 10   & Non-botnet aggregated source IPs incorrectly flagged \\
+FN (Malicious missed)   & 2    & Malicious aggregated source IPs not detected \\
+\midrule
+Precision & 0.4444 & Fewer than half of the alerts are true positives \\
+Recall    & 0.8000 & 80\% of the malicious aggregated source IPs are detected \\
+F1-score  & 0.5714 & Moderate balance between precision and recall \\
+FPR       & 0.0029 & Low false-positive rate over the majority class \\
+Accuracy  & 0.9965 & High mainly because the dataset is highly imbalanced \\
+$\tau_{\text{major}}$ & 121.1087 & Major-score threshold calibrated on validation set \\
+$\tau_{\text{minor}}$ & 44.3569  & Minor-score threshold calibrated on validation set \\
+\bottomrule
+\end{tabular}
+\caption{Detection performance on the test set using aggregated source IP labels.}
+\label{tab:metrics}
+\end{table}
+
+\subsection{Interpretation of Results}
+
+The detector recovers 8 of the 10 malicious aggregated source IPs present in the test set, but it also raises 10 false alarms. As a result, recall remains acceptable at 0.8000, whereas precision is limited to 0.4444.
+
+The very high accuracy should not be over-interpreted, because it is dominated by the large number of non-botnet aggregated source IPs. In this setting, F1-score, precision, recall, and FPR provide a much more informative summary than accuracy alone.
+
+\subsection{Threshold Calibration Analysis}
+
+Threshold calibration is performed on the validation set through a two-dimensional grid search over the major and minor anomaly scores. The selected pair is:
+\begin{equation}
+\tau_{\text{major}} = 121.1087,
+\qquad
+\tau_{\text{minor}} = 44.3569
+\end{equation}
+
+On the validation set, this pair yields TP = 10, TN = 4027, FP = 8, and FN = 0, corresponding to Precision = 0.5556, Recall = 1.0000, F1 = 0.7143, and FPR = 0.00198. The calibration figure should therefore be interpreted as a heatmap over threshold pairs rather than as a single-threshold curve.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{threshold_heatmap.png}
+    \caption{Validation F1-score over the $(\tau_{\text{major}}, \tau_{\text{minor}})$ grid, with the selected threshold pair marked on the heatmap.}
+    \label{fig:calibration}
+\end{figure}
+
+\subsection{Score Distribution}
+
+The implemented detector does not rely on a single normalized anomaly score. Instead, it uses two scores: a major score and a minor score. In the current test results, detections are driven almost entirely by the major score. The major threshold correctly captures 8 malicious aggregated source IPs, while the minor score does not contribute true positives on the test set and contributes only one false positive on its own.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{score_distribution.png}
+    \caption{Validation score distributions for the major and minor anomaly scores, with the selected thresholds overlaid.}
+    \label{fig:scores}
+\end{figure}
+
+\subsection{Discussion}
+
+The current results show that the detector captures part of the malicious behavior present in Scenario 9, but its precision is limited and it cannot be described as a high-confidence detector in its current form. The method remains useful as an interpretable anomaly-detection baseline, especially because it exposes how TCP communication structure and entropy-based summaries differ between benign and malicious aggregated source-IP profiles.
+
+The current implementation should therefore be presented as a practical, understandable baseline rather than as a near-perfect detector.
+
+\subsection{Additional Evaluation on Scenarios 3 and 10}
+
+To determine whether Scenario 9 was unusually favorable, the same pipeline was also tested on the other locally available CTU-13 scenarios. Two alternatives are especially informative. \textbf{Scenario 3} is the best-performing alternative after Scenario 9 in terms of test-set F1-score, while \textbf{Scenario 10} is operationally closer to Scenario 9 because its test split also contains 10 malicious aggregated source IPs.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Scenario 3} & \textbf{Scenario 10} \\
+\midrule
+Test aggregated source IPs & 10{,}816 & 4{,}505 \\
+Malicious test source IPs  & 2        & 10 \\
+TP                         & 1        & 9 \\
+TN                         & 10{,}813 & 3{,}923 \\
+FP                         & 1        & 572 \\
+FN                         & 1        & 1 \\
+\midrule
+Precision                  & 0.5000   & 0.0155 \\
+Recall                     & 0.5000   & 0.9000 \\
+F1-score                   & 0.5000   & 0.0305 \\
+FPR                        & 0.0001   & 0.1273 \\
+$\tau_{\text{major}}$      & 279.6972 & 280.6202 \\
+$\tau_{\text{minor}}$      & 270.6827 & 5.5478 \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of the two most informative alternatives to Scenario 9. Scenario 3 is the best-performing alternative, while Scenario 10 is the most operationally comparable large scenario.}
+\label{tab:metrics_scenario3_10}
+\end{table}
+
+These two scenarios illustrate different aspects of the detector. Scenario 3 shows that the method can still recover part of the malicious activity in another CTU-13 capture while keeping the false-positive rate extremely low. However, the test split contains only two malicious aggregated source IPs, so the estimate is fragile: detecting or missing a single malicious instance changes recall by 50 percentage points.
+
+Scenario 10 provides a more demanding and more realistic comparison because it contains the same number of malicious aggregated source IPs in the test split as Scenario 9. In that setting, the detector preserves a high recall of 0.9000, but at the cost of 572 false alarms. Precision therefore collapses to 0.0155 and the F1-score falls to 0.0305. This indicates that the current feature space and threshold calibration do not transfer cleanly to another large, active scenario even when the malicious population is comparable.
+
+Taken together, Scenarios 3 and 10 clarify the status of Scenario 9. Scenario 3 shows that the method can remain selective on another capture, but only under a very small malicious test population. Scenario 10 shows that once the scenario is both large and maliciously active, the detector becomes much harder to control. Under the same pipeline, Scenario 9 remains the most informative and best-performing benchmark.
+
+\section{Conclusion}
+
+This project implemented and evaluated a TCP-focused botnet detection pipeline inspired by the Lakhina Entropy approach on CTU-13 Scenario 9. The implemented version aggregates TCP flows by source IP, computes entropy-based summary features, and applies PCA-derived major and minor anomaly scores with thresholds calibrated on a validation set.
+
+On the test set, the detector reaches Precision = 0.4444, Recall = 0.8000, and F1 = 0.5714. These results show that the approach can recover a substantial fraction of malicious aggregated source IPs, but also produces non-negligible false positives. The main contribution of the current implementation is therefore not state-of-the-art performance, but a clear and interpretable baseline for entropy-based anomaly detection on CTU-13.
+
+\appendix
+\section{Annex: Python Code}
+
+This annex provides the main Python script used for the project. The full project source code remains available online at:
+\url{https://github.com/silveiraslore/supsys-lakhina-entropy-detection.git}
+
+\subsection{Main Detection Script}
+\lstinputlisting[caption={Original Lakhina-style detection pipeline adapted to the local project}]{code/main_detection_original.py}
+
+\begin{thebibliography}{9}
+
+\bibitem{lakhina2005}
+A. Lakhina, M. Crovella, C. Diot.
+\textit{Mining Anomalies Using Traffic Feature Distributions}.
+ACM SIGCOMM, 2005.
+
+\bibitem{lakhina2004}
+A. Lakhina, M. Crovella, C. Diot.
+\textit{Diagnosing Network-Wide Traffic Anomalies}.
+ACM SIGCOMM, 2004.
+
+\bibitem{garcia2014}
+S. Garc\'ia, M. Grill, J. Stiborek, A. Zunino.
+\textit{An Empirical Comparison of Botnet Detection Methods}.
+Computers \& Security, Vol. 45, pp. 100--123, 2014.
+
+\bibitem{ctu13}
+CTU-13 Dataset.
+\url{https://www.stratosphereips.org/datasets-ctu13}
+
+\end{thebibliography}
+
+\end{document}

@@ -18,7 +18,7 @@ import matplotlib.dates as mdates
 import seaborn as sns
 
 
-# ── Global Style ─────────────────────────────────────────────────────────────
+# Global plotting style
 plt.rcParams.update({
     'figure.dpi': 120,
     'axes.grid': True,
@@ -34,7 +34,7 @@ COLORS = {
 }
 
 
-# ── Global Analysis ──────────────────────────────────────────────────────────
+# Global analysis helpers
 
 def print_summary(df: pd.DataFrame):
     """Prints a complete summary of the dataset."""
@@ -43,21 +43,21 @@ def print_summary(df: pd.DataFrame):
     print("=" * 60)
     
     print(f"\n{'Total flows':30s}: {len(df):,}")
-    print(f"{'Period':30s}: {df['StartTime'].min()} → {df['StartTime'].max()}")
+    print(f"{'Period':30s}: {df['StartTime'].min()} -> {df['StartTime'].max()}")
     print(f"{'Captured duration':30s}: {df['StartTime'].max() - df['StartTime'].min()}")
     
-    print("\n── Label Distribution ──")
+    print("\n-- Label Distribution --")
     label_counts = df['Label'].value_counts()
     for label, count in label_counts.items():
-        bar = '█' * int(count / len(df) * 40)
+        bar = '#' * int(count / len(df) * 40)
         print(f"  {label:12s}: {count:>8,} ({count/len(df)*100:5.2f}%)  {bar}")
     
-    print("\n── Protocols ──")
+    print("\n-- Protocols --")
     proto_counts = df['Proto'].value_counts().head(10)
     for proto, count in proto_counts.items():
         print(f"  {str(proto):8s}: {count:>8,} ({count/len(df)*100:5.2f}%)")
     
-    print("\n── Numerical Statistics ──")
+    print("\n-- Numerical Statistics --")
     numeric_cols = ['Dur', 'TotPkts', 'TotBytes', 'SrcBytes']
     print(df[numeric_cols].describe().to_string())
 
@@ -80,7 +80,7 @@ def plot_label_distribution(df: pd.DataFrame, save_dir: str = 'results/'):
     )
     for at in autotexts:
         at.set_fontsize(9)
-    axes[0].set_title('Label Distribution (% global)')
+    axes[0].set_title('Label Distribution (% of all flows)')
     
     # Bar chart in log scale (useful as Background >> Botnet)
     axes[1].bar(counts.index, counts.values, color=colors, edgecolor='black', linewidth=0.5)
@@ -109,7 +109,7 @@ def plot_traffic_over_time(df: pd.DataFrame,
     for ax, label in zip(axes, ['Botnet', 'Normal', 'Background']):
         subset = df_time[df_time['Label'] == label]
         if len(subset) == 0:
-            ax.set_title(f'{label} — no data')
+            ax.set_title(f'{label} - no data')
             continue
         
         # Counting by time window
@@ -164,11 +164,11 @@ def plot_feature_distributions(df: pd.DataFrame, save_dir: str = 'results/'):
 
 
 def plot_protocol_by_label(df: pd.DataFrame, save_dir: str = 'results/'):
-    """Heatmap of protocols by label — reveals botnet behavior."""
+    """Heatmap of protocols by label that highlights botnet behavior."""
     pivot = pd.crosstab(
         df['Proto'],
         df['Label'],
-        normalize='index'  # % per protocol
+        normalize='index'  # Percentage per protocol
     )
     
     # Keep only most frequent protocols
@@ -277,32 +277,25 @@ def compute_entropy_preview(df: pd.DataFrame,
     return df_ent
 
 
-# ── Utilities ──────────────────────────────────────────────────────────────
+# Helper functions
 
 def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
-    """Saves a figure to the results/ folder."""
+    """Save a figure to the results folder."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     filepath = Path(save_dir) / filename
     fig.savefig(filepath, bbox_inches='tight')
     print(f"[INFO] Figure saved: {filepath}")
 
-def _save_fig(fig: plt.Figure, save_dir: str, filename: str):
-    """Sauvegarde une figure dans le dossier results/."""
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
-    filepath = Path(save_dir) / filename
-    fig.savefig(filepath, bbox_inches='tight')
-    print(f"[INFO] Figure sauvegardée : {filepath}")
-
 
 def _maybe_show():
-    """Affiche la figure seulement si le backend est interactif."""
+    """Display the figure only when the backend is interactive."""
     backend = plt.get_backend().lower()
     if 'agg' not in backend:
         plt.show()
 
 
 def _normalized_entropy(series: pd.Series) -> float:
-    """Entropie de Shannon normalisée dans [0, 1]."""
+    """Compute normalized Shannon entropy in [0, 1]."""
     if len(series) == 0:
         return 0.0
 

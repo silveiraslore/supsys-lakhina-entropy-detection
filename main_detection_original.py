@@ -1,17 +1,17 @@
 """
-Adaptation locale de l'implémentation d'origine fournie dans
+Local adaptation of the original implementation provided in
 `Lakhina_entropy_IDS.ipynb`.
 
-Objectif :
-    - conserver au maximum la logique du notebook original ;
-    - brancher le code sur les imports et chemins locaux du projet ;
-    - produire des résultats séparés afin de comparer cette version avec
-      l'implémentation améliorée du dépôt.
+Goal:
+    - preserve the original notebook logic as closely as possible;
+    - connect the code to the project's local imports and paths;
+    - produce separate outputs to compare this version with the improved
+      repository implementation.
 
-Différences minimales par rapport au notebook :
-    - chargement via les splits locaux train / val / test ;
-    - calibration des seuils sur le validation set ;
-    - sauvegarde locale des métriques, prédictions et figures.
+Minimal differences from the notebook:
+    - loading through local train / val / test splits;
+    - threshold calibration on the validation set;
+    - local export of metrics, predictions, and figures.
 """
 
 from __future__ import annotations
@@ -72,15 +72,15 @@ CONFIG = {
 
 
 def print_banner(title: str) -> None:
-    """Affiche une bannière simple."""
+    """Print a simple ASCII banner."""
     width = 68
-    print("\n" + "╔" + "═" * (width - 2) + "╗")
-    print("║" + title.center(width - 2) + "║")
-    print("╚" + "═" * (width - 2) + "╝")
+    print("\n" + "+" + "=" * (width - 2) + "+")
+    print("|" + title.center(width - 2) + "|")
+    print("+" + "=" * (width - 2) + "+")
 
 
 def load_splits(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Charge les splits locaux ou les régénère si nécessaire."""
+    """Load local splits, or regenerate them if needed."""
     split_paths = get_split_paths(config['splits_dir'])
     metadata = load_split_metadata(config['splits_dir'])
     splits_exist = all(split_paths[name].exists() for name in ('train', 'val', 'test'))
@@ -93,7 +93,7 @@ def load_splits(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
     )
 
     if splits_exist and metadata_ok:
-        print("[LOAD] Chargement des splits depuis les fichiers Parquet...")
+        print("[LOAD] Loading splits from Parquet files...")
         return (
             pd.read_parquet(split_paths['train']),
             pd.read_parquet(split_paths['val']),
@@ -101,13 +101,13 @@ def load_splits(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         )
 
     if splits_exist:
-        print("[LOAD] Splits présents mais obsolètes.")
+        print("[LOAD] Split files exist but are outdated.")
         for reason in metadata_reasons:
             print(f"       - {reason}")
     else:
-        print("[LOAD] Fichiers Parquet introuvables.")
+        print("[LOAD] Parquet files not found.")
 
-    print("[LOAD] Rechargement depuis le fichier source...")
+    print("[LOAD] Reloading data from the source file...")
     df_raw = load_binetflow(glob.glob   (config['dataset_path'])[0])
     df = clean_dataframe(df_raw)
     df_train, df_val, df_test = split_dataset(
@@ -124,15 +124,15 @@ def load_splits(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         train_ratio=config['train_ratio'],
         val_ratio=config['val_ratio'],
     )
-    print("[LOAD] Splits sauvegardés en Parquet avec métadonnée.")
+    print("[LOAD] Splits saved to Parquet with metadata.")
     return df_train, df_val, df_test
 
 
 def print_split_overview(df_train: pd.DataFrame,
                          df_val: pd.DataFrame,
                          df_test: pd.DataFrame) -> None:
-    """Affiche un résumé court des splits."""
-    print("\n── Aperçu des splits ─────────────────────────────────────────────")
+    """Print a compact split summary."""
+    print("\n-- Split overview ------------------------------------------------")
     for name, df in [('Train', df_train), ('Val', df_val), ('Test', df_test)]:
         counts = df['Label'].value_counts()
         total = len(df)
@@ -145,7 +145,7 @@ def print_split_overview(df_train: pd.DataFrame,
 
 
 def compute_entropy(values: list) -> float:
-    """Calcule l'entropie de Shannon brute comme dans le notebook original."""
+    """Compute raw Shannon entropy as in the original notebook."""
     counts = Counter(values)
     total = sum(counts.values())
     if total == 0:
@@ -155,14 +155,14 @@ def compute_entropy(values: list) -> float:
 
 def get_flow_label(label_str: str) -> int:
     """
-    Reprend la logique originale :
-    1 si 'From-Botnet' apparaît dans le label brut, sinon 0.
+    Reproduce the original labeling rule:
+    return 1 if 'From-Botnet' appears in the raw label, else 0.
     """
     return 1 if "From-Botnet" in str(label_str) else 0
 
 
 def add_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Ajoute les colonnes de flags TCP à partir de `State`."""
+    """Add TCP flag columns derived from `State`."""
     state = df['State'].fillna('').astype(str)
     enriched = df.copy()
     enriched['syn'] = state.str.contains('S', regex=False).astype(int)
@@ -177,8 +177,8 @@ def add_flag_columns(df: pd.DataFrame) -> pd.DataFrame:
 def aggregate_features(df: pd.DataFrame,
                        malicious_threshold: float = 0.0) -> pd.DataFrame:
     """
-    Reprise de l'agrégation du notebook original :
-    une ligne par IP source, avec fréquences de flags, entropies et label agrégé.
+    Reproduce the original notebook aggregation:
+    one row per source IP with flag frequencies, entropies, and an aggregated label.
     """
     aggregated_rows = []
 
@@ -215,26 +215,26 @@ def aggregate_features(df: pd.DataFrame,
 def prepare_original_features(df: pd.DataFrame,
                               config: dict,
                               label: str) -> pd.DataFrame:
-    """Prépare les features exactement dans l'esprit du notebook."""
+    """Prepare features in the exact spirit of the original notebook."""
     prepared = df.copy()
     prepared['Proto'] = prepared['Proto'].fillna('').astype(str).str.lower()
     if config['use_tcp_only']:
         prepared = prepared[prepared['Proto'] == 'tcp'].copy()
-        print(f"[{label}] Flows TCP conservés : {len(prepared):,}")
+        print(f"[{label}] TCP flows kept: {len(prepared):,}")
 
     prepared = add_flag_columns(prepared)
     features_df = aggregate_features(
         prepared,
         malicious_threshold=config['malicious_threshold'],
     )
-    print(f"[{label}] IPs agrégées : {len(features_df):,}")
+    print(f"[{label}] Aggregated IPs: {len(features_df):,}")
     return features_df
 
 
 def perform_pca(df: pd.DataFrame,
                 feature_cols: tuple[str, ...],
                 eigen_threshold: float = 1e-6) -> tuple[np.ndarray, PCA, np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
-    """Reprise fidèle du PCA du notebook d'origine."""
+    """Faithful PCA implementation from the original notebook."""
     data_matrix = df[list(feature_cols)].values
     scaler = StandardScaler()
     data_scaled = scaler.fit_transform(data_matrix)
@@ -255,7 +255,7 @@ def calculate_anomaly_scores(k: int,
                              data_matrix: np.ndarray,
                              significant_components: np.ndarray,
                              eigenvalues: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Calcule les scores majeur / mineur du notebook original."""
+    """Compute the major and minor scores from the original notebook."""
     n_components = significant_components.shape[0]
     if k >= n_components:
         raise ValueError("k must be less than the number of significant components")
@@ -279,9 +279,9 @@ def predict_anomalies(anomaly_scores_major: np.ndarray,
                       anomaly_scores_minor: np.ndarray,
                       threshold_major: float,
                       threshold_minor: float) -> np.ndarray:
-    """Reprend la règle OR du notebook original."""
+    """Apply the original notebook OR decision rule."""
     if anomaly_scores_major.shape != anomaly_scores_minor.shape:
-        raise ValueError("Les dimensions des scores majeur et mineur doivent être identiques.")
+        raise ValueError("Major and minor score arrays must have identical shapes.")
 
     predictions = np.logical_or(
         anomaly_scores_major > threshold_major,
@@ -292,7 +292,7 @@ def predict_anomalies(anomaly_scores_major: np.ndarray,
 
 def compute_binary_metrics(y_true: np.ndarray,
                            y_pred: np.ndarray) -> dict:
-    """Calcule les métriques binaires classiques du notebook."""
+    """Compute the standard binary metrics used by the notebook."""
     try:
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     except ValueError:
@@ -324,9 +324,9 @@ def calibrate_thresholds(val_major: np.ndarray,
                          val_minor: np.ndarray,
                          y_true: np.ndarray,
                          grid_points: int) -> tuple[dict, pd.DataFrame]:
-    """Cherche le meilleur couple de seuils sur le validation set."""
+    """Search for the best threshold pair on the validation set."""
     if len(val_major) == 0:
-        raise ValueError("Validation set vide après agrégation.")
+        raise ValueError("Validation set is empty after aggregation.")
 
     if np.allclose(val_major.min(), val_major.max()):
         threshold_major_values = np.array([val_major.min()])
@@ -367,7 +367,7 @@ def calibrate_thresholds(val_major: np.ndarray,
 def plot_threshold_heatmap(results_df: pd.DataFrame,
                            save_dir: str,
                            best_thresholds: dict | None = None) -> None:
-    """Trace la heatmap F1 du notebook original et marque le seuil retenu."""
+    """Plot the validation F1 heatmap and mark the selected threshold pair."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     pivot = results_df.pivot(
         index='threshold_minor',
@@ -377,7 +377,7 @@ def plot_threshold_heatmap(results_df: pd.DataFrame,
 
     fig, ax = plt.subplots(figsize=(8, 6))
     sns.heatmap(pivot, annot=False, fmt='.3f', cmap='viridis', ax=ax)
-    ax.set_title("F1-Score selon les seuils major / minor")
+    ax.set_title("F1 score across major / minor thresholds")
     ax.set_xlabel("Threshold Major")
     ax.set_ylabel("Threshold Minor")
 
@@ -397,8 +397,8 @@ def plot_threshold_heatmap(results_df: pd.DataFrame,
             zorder=10,
         )
         ax.set_title(
-            "F1-Score selon les seuils major / minor\n"
-            f"Seuil retenu: major={best_thresholds['threshold_major']:.4f} | "
+            "F1 score across major / minor thresholds\n"
+            f"Selected threshold: major={best_thresholds['threshold_major']:.4f} | "
             f"minor={best_thresholds['threshold_minor']:.4f}"
         )
 
@@ -407,7 +407,7 @@ def plot_threshold_heatmap(results_df: pd.DataFrame,
     save_path = Path(save_dir) / 'threshold_heatmap.png'
     fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
-    print(f"[INFO] Figure sauvegardée : {save_path}")
+    print(f"[INFO] Figure saved: {save_path}")
 
 
 def plot_score_thresholds(val_major: np.ndarray,
@@ -415,13 +415,13 @@ def plot_score_thresholds(val_major: np.ndarray,
                           y_true: np.ndarray,
                           best_thresholds: dict,
                           save_dir: str) -> None:
-    """Visualise les distributions de scores avec les seuils retenus."""
+    """Plot validation score distributions with the selected thresholds."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    labels = np.where(np.asarray(y_true).astype(int) == 1, 'Malicieux', 'Normal')
+    labels = np.where(np.asarray(y_true).astype(int) == 1, 'Malicious', 'Normal')
     label_colors = {
         'Normal': '#2ecc71',
-        'Malicieux': '#e74c3c',
+        'Malicious': '#e74c3c',
     }
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
@@ -431,7 +431,7 @@ def plot_score_thresholds(val_major: np.ndarray,
     )
 
     for ax, (title, scores, threshold) in zip(axes, score_specs):
-        for label_name in ('Normal', 'Malicieux'):
+        for label_name in ('Normal', 'Malicious'):
             subset = np.asarray(scores)[labels == label_name]
             if len(subset) == 0:
                 continue
@@ -449,24 +449,24 @@ def plot_score_thresholds(val_major: np.ndarray,
             color='black',
             linestyle='--',
             linewidth=2.0,
-            label=f'Seuil = {threshold:.4f}',
+            label=f'Threshold = {threshold:.4f}',
         )
         ax.set_title(title)
-        ax.set_xlabel('Valeur du score')
-        ax.set_ylabel('Densité')
+        ax.set_xlabel('Score value')
+        ax.set_ylabel('Density')
         ax.legend()
 
-    fig.suptitle("Distributions des scores de validation et seuils retenus", fontsize=12)
+    fig.suptitle("Validation score distributions and selected thresholds", fontsize=12)
     fig.tight_layout()
 
     save_path = Path(save_dir) / 'score_thresholds.png'
     fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
-    print(f"[INFO] Figure sauvegardée : {save_path}")
+    print(f"[INFO] Figure saved: {save_path}")
 
 
 def plot_confusion(metrics: dict, save_dir: str) -> None:
-    """Sauvegarde une matrice de confusion simple."""
+    """Save a simple confusion matrix figure."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     matrix = np.array([
         [metrics['TN'], metrics['FP']],
@@ -479,19 +479,19 @@ def plot_confusion(metrics: dict, save_dir: str) -> None:
         annot=True,
         fmt='d',
         cmap='Blues',
-        xticklabels=['Prédit normal', 'Prédit malicieux'],
-        yticklabels=['Réel normal', 'Réel malicieux'],
+        xticklabels=['Predicted normal', 'Predicted malicious'],
+        yticklabels=['Actual normal', 'Actual malicious'],
         ax=ax,
     )
-    ax.set_title('Matrice de confusion — implémentation originale')
-    ax.set_xlabel('Prédiction')
-    ax.set_ylabel('Vérité terrain')
+    ax.set_title('Confusion matrix - original implementation')
+    ax.set_xlabel('Prediction')
+    ax.set_ylabel('Ground truth')
     fig.tight_layout()
 
     save_path = Path(save_dir) / 'confusion_matrix.png'
     fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
-    print(f"[INFO] Figure sauvegardée : {save_path}")
+    print(f"[INFO] Figure saved: {save_path}")
 
 
 def save_outputs(config: dict,
@@ -501,7 +501,7 @@ def save_outputs(config: dict,
                  metrics: dict,
                  best_thresholds: dict,
                  report: str) -> None:
-    """Sauvegarde les sorties de l'implémentation originale."""
+    """Save outputs produced by the original implementation."""
     save_dir = Path(config['results_dir'])
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -538,30 +538,30 @@ def main() -> None:
     start_total = time.time()
     Path(CONFIG['results_dir']).mkdir(parents=True, exist_ok=True)
 
-    print_banner("IMPLÉMENTATION ORIGINALE DU NOTEBOOK")
+    print_banner("ORIGINAL NOTEBOOK IMPLEMENTATION")
     print("  Source   : Lakhina_entropy_IDS.ipynb")
-    print("  Objectif : adaptation locale pour comparaison")
+    print("  Purpose  : local adaptation for comparison")
     print(f"  Dataset  : {CONFIG['dataset_path']}")
-    print(f"  Résultats: {CONFIG['results_dir']}")
+    print(f"  Results  : {CONFIG['results_dir']}")
 
-    print_banner("ÉTAPE 1 — Chargement des données")
+    print_banner("STEP 1 - Load data")
     df_train, df_val, df_test = load_splits(CONFIG)
     print_split_overview(df_train, df_val, df_test)
 
-    print_banner("ÉTAPE 2 — Agrégation originale par IP source")
+    print_banner("STEP 2 - Original source-IP aggregation")
     train_features = prepare_original_features(df_train, CONFIG, label='TRAIN')
     val_features = prepare_original_features(df_val, CONFIG, label='VAL')
     test_features = prepare_original_features(df_test, CONFIG, label='TEST')
 
-    print_banner("ÉTAPE 3 — PCA sur le train")
+    print_banner("STEP 3 - PCA on train split")
     _, pca_model, significant_components, eigenvalues_sig, train_scaled, scaler = perform_pca(
         train_features,
         CONFIG['pca_feature_columns'],
         eigen_threshold=CONFIG['eigen_threshold'],
     )
     explained = float(np.sum(pca_model.explained_variance_ratio_) * 100)
-    print(f"[PCA] Variance expliquée totale : {explained:.2f}%")
-    print(f"[PCA] Composantes significatives : {significant_components.shape[0]}")
+    print(f"[PCA] Total explained variance: {explained:.2f}%")
+    print(f"[PCA] Significant components: {significant_components.shape[0]}")
 
     train_major, train_minor = calculate_anomaly_scores(
         CONFIG['k_minor'],
@@ -569,9 +569,9 @@ def main() -> None:
         significant_components,
         eigenvalues_sig,
     )
-    print(f"[PCA] Scores train calculés : {len(train_major):,}")
+    print(f"[PCA] Train scores computed: {len(train_major):,}")
 
-    print_banner("ÉTAPE 4 — Calibration sur validation")
+    print_banner("STEP 4 - Validation calibration")
     val_matrix = val_features[list(CONFIG['pca_feature_columns'])].values
     val_scaled = scaler.transform(val_matrix)
     val_major, val_minor = calculate_anomaly_scores(
@@ -588,7 +588,7 @@ def main() -> None:
         grid_points=CONFIG['threshold_grid_points'],
     )
     print(
-        "[CALIBRATE] Meilleur couple de seuils : "
+        "[CALIBRATE] Best threshold pair: "
         f"major={best_thresholds['threshold_major']:.4f} | "
         f"minor={best_thresholds['threshold_minor']:.4f} | "
         f"F1={best_thresholds['F1']:.4f}"
@@ -606,7 +606,7 @@ def main() -> None:
         CONFIG['results_dir'],
     )
 
-    print_banner("ÉTAPE 5 — Prédiction sur le test set")
+    print_banner("STEP 5 - Test set prediction")
     test_matrix = test_features[list(CONFIG['pca_feature_columns'])].values
     test_scaled = scaler.transform(test_matrix)
     test_major, test_minor = calculate_anomaly_scores(
@@ -628,12 +628,12 @@ def main() -> None:
     test_results['anomaly_score_minor'] = test_minor
     test_results['Prediction'] = y_pred
 
-    print_banner("ÉTAPE 6 — Évaluation")
+    print_banner("STEP 6 - Evaluation")
     metrics = compute_binary_metrics(y_test, y_pred)
     report = classification_report(
         y_test,
         y_pred,
-        target_names=['Normal', 'Malicieux'],
+        target_names=['Normal', 'Malicious'],
         zero_division=0,
     )
     plot_confusion(metrics, CONFIG['results_dir'])
@@ -647,7 +647,7 @@ def main() -> None:
     print("\nClassification Report:\n")
     print(report)
 
-    print_banner("ÉTAPE 7 — Sauvegarde")
+    print_banner("STEP 7 - Save outputs")
     save_outputs(
         CONFIG,
         train_features=train_features,
@@ -659,15 +659,15 @@ def main() -> None:
     )
 
     elapsed = time.time() - start_total
-    print_banner("RÉSUMÉ FINAL")
+    print_banner("FINAL SUMMARY")
     print(f"  Threshold major : {best_thresholds['threshold_major']:.4f}")
     print(f"  Threshold minor : {best_thresholds['threshold_minor']:.4f}")
     print(f"  Precision       : {metrics['Precision']:.4f}")
     print(f"  Recall          : {metrics['Recall']:.4f}")
     print(f"  F1              : {metrics['F1']:.4f}")
     print(f"  FPR             : {metrics['FPR']:.4f}")
-    print(f"\n  Temps total     : {elapsed:.1f}s")
-    print(f"  Résultats       : {CONFIG['results_dir']}")
+    print(f"\n  Total time      : {elapsed:.1f}s")
+    print(f"  Results         : {CONFIG['results_dir']}")
 
 
 if __name__ == '__main__':

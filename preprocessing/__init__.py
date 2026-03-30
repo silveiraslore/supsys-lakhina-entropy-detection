@@ -1,3 +1,3 @@
 """
-Module de chargement et prétraitement du dataset CTU-13.
+CTU-13 dataset loading and preprocessing utilities.
 """

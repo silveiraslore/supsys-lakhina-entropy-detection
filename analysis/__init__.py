@@ -1,3 +1,3 @@
 """
-Module d'analyse statistique et visualisation du dataset CTU-13.
+CTU-13 statistical analysis and visualization utilities.
 """

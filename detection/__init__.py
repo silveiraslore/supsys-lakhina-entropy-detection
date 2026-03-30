@@ -1,3 +1,3 @@
 """
-Module d'implémentation des algorithmes de détection d'anomalies.
+Anomaly detection algorithm implementations.
 """
