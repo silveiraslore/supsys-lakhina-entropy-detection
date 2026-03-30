@@ -15,7 +15,9 @@ import pandas as pd
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
-# Columns of the CTU-13 .binetflow format
+# Columns of the CTU-13 .binetflow format used by the project.
+# Some CTU-13 scenarios ship an older/richer 2format schema where `Dir`
+# is missing; we synthesize it at load time for compatibility.
 COLUMNS = [
     'StartTime', 'Dur', 'Proto', 'SrcAddr', 'Sport',
     'Dir', 'DstAddr', 'Dport', 'State', 'sTos',
@@ -32,7 +34,11 @@ LABEL_PATTERNS = (
     ('background', 'Background'),
 )
 
-REQUIRED_COLUMNS = set(COLUMNS)
+OPTIONAL_COLUMNS_DEFAULTS = {
+    'Dir': 'Unknown',
+}
+
+REQUIRED_COLUMNS = set(COLUMNS) - set(OPTIONAL_COLUMNS_DEFAULTS)
 
 DEFAULT_TRAIN_RATIO = 0.60
 DEFAULT_VAL_RATIO = 0.20
@@ -67,6 +73,11 @@ def load_binetflow(filepath: str) -> pd.DataFrame:
     )
 
     df.columns = df.columns.str.strip()
+
+    for col, default_value in OPTIONAL_COLUMNS_DEFAULTS.items():
+        if col not in df.columns:
+            df[col] = default_value
+
     missing_columns = REQUIRED_COLUMNS - set(df.columns)
     if missing_columns:
         raise ValueError(
@@ -379,4 +390,3 @@ def _print_split_info(name: str, df: pd.DataFrame):
           f"({counts.get('Normal', 0)/total*100:4.1f}%) | "
           f"Background: {counts.get('Background', 0):>7,} "
           f"({counts.get('Background', 0)/total*100:4.1f}%)")
-

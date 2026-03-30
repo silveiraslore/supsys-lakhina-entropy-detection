@@ -52,8 +52,8 @@ from preprocessing.loader import (
 
 
 CONFIG = {
-    'dataset_path': 'data/CTU-13-Dataset/9/*.binetflow',
-    'splits_dir': 'data/CTU-13-Dataset/9/splits/',
+    'dataset_path': 'dataset/3/capture20110812.binetflow',
+    'splits_dir': 'dataset/3/splits',
     'results_dir': 'results/',
     'train_ratio': DEFAULT_TRAIN_RATIO,
     'val_ratio': DEFAULT_VAL_RATIO,
@@ -364,8 +364,10 @@ def calibrate_thresholds(val_major: np.ndarray,
     return best, pd.DataFrame(results)
 
 
-def plot_threshold_heatmap(results_df: pd.DataFrame, save_dir: str) -> None:
-    """Trace la heatmap F1 du notebook original."""
+def plot_threshold_heatmap(results_df: pd.DataFrame,
+                           save_dir: str,
+                           best_thresholds: dict | None = None) -> None:
+    """Trace la heatmap F1 du notebook original et marque le seuil retenu."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     pivot = results_df.pivot(
         index='threshold_minor',
@@ -378,9 +380,86 @@ def plot_threshold_heatmap(results_df: pd.DataFrame, save_dir: str) -> None:
     ax.set_title("F1-Score selon les seuils major / minor")
     ax.set_xlabel("Threshold Major")
     ax.set_ylabel("Threshold Minor")
+
+    if best_thresholds is not None:
+        x_values = np.asarray(pivot.columns, dtype=float)
+        y_values = np.asarray(pivot.index, dtype=float)
+        x_idx = int(np.argmin(np.abs(x_values - float(best_thresholds['threshold_major']))))
+        y_idx = int(np.argmin(np.abs(y_values - float(best_thresholds['threshold_minor']))))
+        ax.scatter(
+            x_idx + 0.5,
+            y_idx + 0.5,
+            s=160,
+            marker='X',
+            color='white',
+            edgecolors='black',
+            linewidths=1.5,
+            zorder=10,
+        )
+        ax.set_title(
+            "F1-Score selon les seuils major / minor\n"
+            f"Seuil retenu: major={best_thresholds['threshold_major']:.4f} | "
+            f"minor={best_thresholds['threshold_minor']:.4f}"
+        )
+
     fig.tight_layout()
 
     save_path = Path(save_dir) / 'threshold_heatmap.png'
+    fig.savefig(save_path, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Figure sauvegardée : {save_path}")
+
+
+def plot_score_thresholds(val_major: np.ndarray,
+                          val_minor: np.ndarray,
+                          y_true: np.ndarray,
+                          best_thresholds: dict,
+                          save_dir: str) -> None:
+    """Visualise les distributions de scores avec les seuils retenus."""
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    labels = np.where(np.asarray(y_true).astype(int) == 1, 'Malicieux', 'Normal')
+    label_colors = {
+        'Normal': '#2ecc71',
+        'Malicieux': '#e74c3c',
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    score_specs = (
+        ('Score major', val_major, float(best_thresholds['threshold_major'])),
+        ('Score minor', val_minor, float(best_thresholds['threshold_minor'])),
+    )
+
+    for ax, (title, scores, threshold) in zip(axes, score_specs):
+        for label_name in ('Normal', 'Malicieux'):
+            subset = np.asarray(scores)[labels == label_name]
+            if len(subset) == 0:
+                continue
+            ax.hist(
+                subset,
+                bins=40,
+                density=True,
+                alpha=0.55,
+                label=label_name,
+                color=label_colors[label_name],
+            )
+
+        ax.axvline(
+            threshold,
+            color='black',
+            linestyle='--',
+            linewidth=2.0,
+            label=f'Seuil = {threshold:.4f}',
+        )
+        ax.set_title(title)
+        ax.set_xlabel('Valeur du score')
+        ax.set_ylabel('Densité')
+        ax.legend()
+
+    fig.suptitle("Distributions des scores de validation et seuils retenus", fontsize=12)
+    fig.tight_layout()
+
+    save_path = Path(save_dir) / 'score_thresholds.png'
     fig.savefig(save_path, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Figure sauvegardée : {save_path}")
@@ -514,7 +593,18 @@ def main() -> None:
         f"minor={best_thresholds['threshold_minor']:.4f} | "
         f"F1={best_thresholds['F1']:.4f}"
     )
-    plot_threshold_heatmap(results_df, CONFIG['results_dir'])
+    plot_threshold_heatmap(
+        results_df,
+        CONFIG['results_dir'],
+        best_thresholds=best_thresholds,
+    )
+    plot_score_thresholds(
+        val_major,
+        val_minor,
+        y_val,
+        best_thresholds,
+        CONFIG['results_dir'],
+    )
 
     print_banner("ÉTAPE 5 — Prédiction sur le test set")
     test_matrix = test_features[list(CONFIG['pca_feature_columns'])].values

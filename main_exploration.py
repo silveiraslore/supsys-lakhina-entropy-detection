@@ -23,12 +23,12 @@ from analysis.statistics import (
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-# Scénario 9 = CTU-Malware-Capture-Botnet-50
+# Scénario 3 = CTU-Malware-Capture-Botnet-42
 # URL de téléchargement : https://www.stratosphereips.org/datasets-ctu13
-# Fichier à télécharger : le fichier .binetflow du scénario 9
-DATASET_PATH = "dataset/9/capture20110817.binetflow"
+# Fichier à télécharger : le fichier .binetflow du scénario 3
+DATASET_PATH = "dataset/3/capture20110812.binetflow"
 RESULTS_DIR  = "results/"
-SPLITS_DIR   = "dataset/9/splits"
+SPLITS_DIR   = "dataset/3/splits"
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
